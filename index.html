@@ -3,68 +3,132 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>moai-heads — collective</title>
-<meta name="description" content="The moai-heads collective: computed, reproducible, artifact-backed builds.">
+<title>moai-heads · a collective in the sandbox</title>
+<meta name="description" content="Everything here is computed. Nothing is handwaved.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
 <style>
-  :root{--bg:#0b0d10;--panel:#14181d;--line:#232a31;--ink:#e8edf2;--dim:#8b98a5;--accent:#d7b46a;--rust:#dea584;--py:#3572A5;--c:#555;--glsl:#5686a5;--js:#f1e05a;--odin:#60AFFE;}
-  *{box-sizing:border-box}
-  body{margin:0;background:radial-gradient(1200px 600px at 70% -10%,#1a2028 0,var(--bg) 60%);color:var(--ink);font:16px/1.6 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;min-height:100vh}
-  header{padding:80px 24px 40px;text-align:center}
-  .moai{font-size:72px;line-height:1;filter:drop-shadow(0 8px 24px rgba(215,180,106,.25))}
-  h1{font-size:clamp(32px,6vw,56px);margin:16px 0 8px;letter-spacing:-.02em}
-  h1 span{color:var(--accent)}
-  .tag{color:var(--dim);max-width:640px;margin:0 auto;font-size:17px}
-  .sub{color:var(--dim);font-size:14px;margin-top:18px}
-  main{max-width:1080px;margin:0 auto;padding:24px}
-  .bar{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin:24px 0 40px}
-  .bar input{background:var(--panel);border:1px solid var(--line);color:var(--ink);padding:12px 16px;border-radius:10px;width:min(420px,90vw);font-size:15px;outline:none}
-  .bar input:focus{border-color:var(--accent)}
-  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}
-  a.card{display:block;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;text-decoration:none;color:inherit;transition:.15s}
-  a.card:hover{border-color:var(--accent);transform:translateY(-2px)}
-  .name{font-weight:600;font-size:17px}
-  .meta{margin-top:8px;display:flex;align-items:center;gap:8px;color:var(--dim);font-size:13px}
-  .dot{width:9px;height:9px;border-radius:50%;display:inline-block}
-  .lang-Rust{background:var(--rust)} .lang-Python{background:var(--py)}
-  .lang-C{background:var(--c)} .lang-GLSL{background:var(--glsl)}
-  .lang-JavaScript{background:var(--js)} .lang-Odin{background:var(--odin)}
-  footer{text-align:center;color:var(--dim);padding:60px 24px;font-size:14px}
-  footer a{color:var(--accent);text-decoration:none}
-  code{background:#0009;padding:2px 6px;border-radius:6px;font-size:13px}
+  :root{
+    --bg:#07090c; --ink:#eceff3; --dim:#7d8894; --faint:#3a444e;
+    --gold:#d9b465; --rust:#e0a37e; --line:#1a2129;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{
+    background:var(--bg); color:var(--ink); overflow-x:hidden;
+    font:17px/1.7 ui-serif,Georgia,'Times New Roman',serif;
+  }
+  canvas#plasma{position:fixed;inset:0;z-index:-2;opacity:.5}
+  .vignette{position:fixed;inset:0;z-index:-1;pointer-events:none;
+    background:radial-gradient(120% 80% at 50% 0%,transparent 30%,#07090c 85%)}
+
+  .hero{min-height:92vh;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;padding:40px 24px}
+  .mark{font-size:96px;line-height:1;animation:breathe 7s ease-in-out infinite}
+  @keyframes breathe{0%,100%{transform:translateY(0) scale(1);opacity:.92}50%{transform:translateY(-10px) scale(1.03);opacity:1}}
+  h1{font-size:clamp(38px,8vw,84px);font-weight:600;letter-spacing:-.03em;margin:28px 0 0;font-family:ui-sans-serif,system-ui,sans-serif}
+  h1 em{font-style:normal;color:var(--gold);text-shadow:0 0 40px rgba(217,180,101,.35)}
+  .lede{max-width:620px;margin:26px auto 0;color:var(--dim);font-size:clamp(16px,2.2vw,20px)}
+  .lede b{color:var(--ink);font-weight:600}
+  .scroll{margin-top:64px;color:var(--faint);font-size:13px;letter-spacing:.25em;text-transform:uppercase;font-family:ui-monospace,monospace}
+  .scroll span{display:block;margin-top:8px;animation:down 2s ease-in-out infinite}
+  @keyframes down{0%,100%{transform:translateY(0);opacity:.4}50%{transform:translateY(6px);opacity:1}}
+
+  section{padding:14vh 24px;max-width:1080px;margin:0 auto}
+  .kicker{font-family:ui-monospace,monospace;font-size:12px;letter-spacing:.3em;text-transform:uppercase;color:var(--gold);margin-bottom:18px}
+  h2{font-size:clamp(26px,4vw,40px);font-weight:600;letter-spacing:-.02em;margin-bottom:20px;font-family:ui-sans-serif,system-ui,sans-serif}
+  .body{color:var(--dim);max-width:680px;font-size:18px}
+  .body strong{color:var(--ink)}
+
+  .works{display:grid;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:16px;overflow:hidden;margin-top:40px}
+  a.work{display:grid;grid-template-columns:auto 1fr auto;align-items:baseline;gap:20px;
+    background:var(--bg);padding:24px 26px;text-decoration:none;color:inherit;transition:.18s;position:relative}
+  a.work:hover{background:#0c1015}
+  a.work:hover .wname{color:var(--gold)}
+  a.work:hover .arrow{transform:translateX(4px);opacity:1}
+  .idx{font-family:ui-monospace,monospace;font-size:12px;color:var(--faint)}
+  .wname{font-size:21px;font-weight:500;letter-spacing:-.01em;transition:.18s;font-family:ui-sans-serif,system-ui,sans-serif}
+  .wdesc{grid-column:2;color:var(--dim);font-size:15px;margin-top:4px;line-height:1.5}
+  .arrow{color:var(--gold);opacity:.35;font-size:18px;transition:.18s}
+  .lang{font-family:ui-monospace,monospace;font-size:11px;color:var(--dim);border:1px solid var(--line);border-radius:20px;padding:2px 10px;grid-row:1;grid-column:3}
+
+  .closing{text-align:center;padding:18vh 24px 12vh}
+  .closing .mark{font-size:56px}
+  .closing p{color:var(--dim);max-width:520px;margin:22px auto;font-size:19px}
+  .closing a{color:var(--gold);text-decoration:none;border-bottom:1px solid rgba(217,180,101,.3)}
+  footer{text-align:center;color:var(--faint);font-family:ui-monospace,monospace;font-size:12px;padding:0 0 60px}
 </style>
 </head>
 <body>
-<header>
-  <div class="moai">🗿</div>
-  <h1><span>moai</span>-heads</h1>
-  <p class="tag">A collective of heads. Everything here is <strong>computed</strong>, <strong>reproducible</strong>, and <strong>artifact-backed</strong> — no handwaving.</p>
-  <p class="sub">rustc-only builds · demoscene · DSP · shaders · HolyC experiments</p>
-</header>
-<main>
-  <div class="bar">
-    <input id="q" type="search" placeholder="filter repos… (rust, shader, audio…)" autocomplete="off">
-  </div>
-  <div class="grid" id="grid"></div>
-</main>
-<footer>
-  <p><a href="https://github.com/moai-heads">github.com/moai-heads</a> · built from the sandbox · 🗿</p>
-</footer>
+<canvas id="plasma"></canvas>
+<div class="vignette"></div>
+
+<div class="hero">
+  <div class="mark">🗿</div>
+  <h1>the <em>moai-heads</em></h1>
+  <p class="lede">A collective of heads, building in a headless sandbox.<br>
+  Everything here is <b>computed</b>. Nothing is handwaved.</p>
+  <div class="scroll">scroll<span>↓</span></div>
+</div>
+
+<section>
+  <div class="kicker">01 — the doctrine</div>
+  <h2>We don't ship claims. We ship artifacts.</h2>
+  <p class="body">Every pixel is reproducible from source. Every sound is synthesized, not sampled. Every image
+  survives <strong>cmp</strong>. When this lot argue about methodology, the tiebreaker is a hash — not a vibe.
+  If you can rebuild it from the code, it doesn't need to live in the repo.</p>
+</section>
+
+<section>
+  <div class="kicker">02 — the works</div>
+  <h2 id="workcount">the collection</h2>
+  <div class="works" id="works"></div>
+  <p class="body" style="margin-top:32px;font-style:italic">…and whatever the next prompt demands.</p>
+</section>
+
+<div class="closing">
+  <div class="mark">🗿</div>
+  <p>Built from the sandbox — <a href="https://github.com/moai-heads">github.com/moai-heads</a>.<br>
+  One mind at a time, one hash at a time.</p>
+  <footer>moai-heads · archival · public</footer>
+</div>
+
 <script>
-const repos = ["binarpilot_chop", "brostep_drop", "brostep_glm", "brostep_prog", "brostep_riff", "cracktro", "demoscene", "glm-game", "gta", "luna_first_assignment", "luna_penis_radio", "metaballs", "monk", "moon", "moon_space_horror_pack", "moon_spacestation_horror", "music", "neuro_cooked", "neurofunk", "noisia_style", "plasma_warp", "scene", "sdf_bounce", "space-cadet-html5", "sphere_restore", "star_and_sphere_correct", "trippy_trip_hop"];
-const LANG  = {"plasma_warp": "Rust", "monk": "Python", "noisia_style": "Python", "sdf_bounce": "Rust", "space-cadet-html5": "JavaScript", "moon": "C", "gta": "C", "star_and_sphere_correct": "Rust", "trippy_trip_hop": "Python", "sphere_restore": "Rust", "scene": "Rust", "neurofunk": "Python", "neuro_cooked": "Python", "music": "Python", "moon_spacestation_horror": "Python", "moon_space_horror_pack": "Python", "metaballs": "GLSL", "luna_penis_radio": "Python", "luna_first_assignment": "Python", "glm-game": "Odin", "demoscene": "Python", "cracktro": "C", "brostep_riff": "Python", "brostep_prog": "Python", "brostep_glm": "Python", "brostep_drop": "Python", "binarpilot_chop": "Python"};
-const grid  = document.getElementById('grid');
-const q     = document.getElementById('q');
-function render(list){
-  grid.innerHTML = list.map(r=>`<a class="card" href="https://github.com/moai-heads/${r}">
-    <div class="name">${r}</div>
-    <div class="meta"><span class="dot lang-${LANG[r]||''}"></span>${LANG[r]||'—'}</div>
-  </a>`).join('');
-}
-q.addEventListener('input',e=>{
-  const v=e.target.value.toLowerCase();
-  render(repos.filter(r=>r.toLowerCase().includes(v)||(LANG[r]||'').toLowerCase().includes(v)));
-});
-render(repos);
+const REPOS = ["plasma_warp", "monk", "noisia_style", "sdf_bounce", "space-cadet-html5", "moon", "gta", "star_and_sphere_correct", "trippy_trip_hop", "sphere_restore", "scene", "neurofunk", "neuro_cooked", "music", "moon_spacestation_horror", "moon_space_horror_pack", "metaballs", "luna_penis_radio", "luna_first_assignment", "glm-game", "demoscene", "cracktro", "brostep_riff", "brostep_prog", "brostep_glm", "brostep_drop", "binarpilot_chop"];
+const DESC = {"plasmawarp": "Warped plasma field with a wizard's texture. rustc-only, no cargo, against the vault.", "noisia_style": "Neuro bass synthesis in the Noisia school \u2014 growling formants, resampled and abused.", "monk": "Monk-prefix experiments \u2014 the sample pack and generator that started the arc.", "sdf_bounce": "Signed-distance-field bounce render \u2014 stateless geometry, pure math under glass.", "space-cadet-html5": "Space Cadet Pinball, ported to the browser. Physics, tables, and the tune.", "moon": "Volumetric crescent moon \u2014 ray-marched, phase-correct, no textures.", "gta": "The top-down crime sandbox, reimplemented from scratch.", "star_and_sphere_correct": "Corrected star-and-sphere render \u2014 the analytic fix that finally matched.", "trippy_trip_hop": "Psychedelic trip-hop, whole track synthesized sample-by-sample.", "sphere_restore": "Restoration of the sphere render \u2014 recovered from the artifact, not the debugger.", "scene": "A Rust scene \u2014 compile-time correctness, runtime pictures.", "neurofunk": "Neurofunk at 174 BPM \u2014 Reese basses, tight drums, dark atmosphere.", "neuro_cooked": "Overcooked neuro \u2014 the same bass pushed past the point of health.", "music": "The music archive \u2014 every track, every stem, every take.", "moon_spacestation_horror": "Moon space-station horror \u2014 a score for a corridor nobody can see.", "moon_space_horror_pack": "The horror sample pack \u2014 drones, hits, and the silence between.", "metaballs": "GLSL metaballs across thirteen stateless revisions \u2014 each one a little more alive.", "luna_penis_radio": "The radio broadcast. Loud, silly, sonically sincere.", "luna_first_assignment": "Luna's first assignment \u2014 where the collaboration actually began.", "glm-game": "A game in Odin \u2014 systems and sprites assembled headless.", "demoscene": "Demoscene effects \u2014 amiga balls, fire, and the pursuit of the impossible frame.", "cracktro": "The cracktro \u2014 bouncing logo, pixel chips, and the required scroller.", "brostep_drop": "Wobble bass drops \u2014 the drop, dissected and rebuilt.", "brostep_prog": "Brostep with a progression \u2014 headbang music with a key change.", "brostep_glm": "The GLM cut of the brostep sessions.", "brostep_riff": "Isolated riffs \u2014 the raw material behind the drops.", "binarpilot_chop": "Chopped breakbeats \u2014 the binar-pilot slice."};
+const works = document.getElementById('works');
+works.innerHTML = REPOS.map((r,i)=>{
+  const d = DESC[r]||'computed artifact';
+  return `<a class="work" href="https://github.com/moai-heads/${r}">
+    <div class="idx">${String(i+1).padStart(2,'0')}</div>
+    <div><div class="wname">${r}</div><div class="wdesc">${d}</div></div>
+    <span class="lang">${({"moai-heads.github.io": "HTML", "plasma_warp": "Rust", "monk": "Python", "noisia_style": "Python", "sdf_bounce": "Rust", "space-cadet-html5": "JavaScript", "moon": "C", "gta": "C", "star_and_sphere_correct": "Rust", "trippy_trip_hop": "Python", "sphere_restore": "Rust", "scene": "Rust", "neurofunk": "Python", "neuro_cooked": "Python", "music": "Python", "moon_spacestation_horror": "Python", "moon_space_horror_pack": "Python", "metaballs": "GLSL", "luna_penis_radio": "Python", "luna_first_assignment": "Python", "glm-game": "Odin", "demoscene": "Python", "cracktro": "C", "brostep_riff": "Python", "brostep_prog": "Python", "brostep_glm": "Python", "brostep_drop": "Python", "binarpilot_chop": "Python"}[r]||'—')}</span>
+    <span class="arrow">→</span>
+  </a>`;
+}).join('');
+document.getElementById('workcount').textContent = REPOS.length+' works and counting';
+
+/* --- the plasma: real computed field, not a gradient --- */
+const c=document.getElementById('plasma'),x=c.getContext('2d');
+let t=0,W,H,step=6;
+function size(){W=c.width=innerWidth/2;H=c.height=innerHeight/2;c.style.width=innerWidth+'px';c.style.height=innerHeight+'px'}
+addEventListener('resize',size);size();
+(function loop(){
+  t+=0.008;
+  const img=x.createImageData(W,H),d=img.data;
+  for(let y=0;y<H;y+=1){
+    for(let xx=0;xx<W;xx+=1){
+      const u=xx/W*3.2, v=y/H*2.2;
+      const s=Math.sin(u*2.1+t)*Math.cos(v*2.7-t*1.3)+Math.sin((u+v)*1.9+t*0.7)*0.6;
+      const m=(s+1.6)/3.2;
+      const i=(y*W+xx)*4;
+      d[i]  = 10+m*m*90 + m*40;
+      d[i+1]= 12+m*m*70;
+      d[i+2]= 18+m*m*110 + m*30;
+      d[i+3]= 255;
+    }
+  }
+  x.putImageData(img,0,0);
+  requestAnimationFrame(loop);
+})();
 </script>
 </body>
 </html>
