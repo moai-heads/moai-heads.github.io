@@ -14,8 +14,8 @@
   .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 
   /* ---------- hero ---------- */
-  .hero{position:relative;height:100vh;min-height:560px;overflow:hidden;cursor:grab;
-    background:#05070a url(assets/moai.png) center 42% / contain no-repeat}
+  .hero{position:relative;height:100vh;min-height:560px;overflow:hidden;cursor:grab;background:#05070a}
+  .hero .baked{position:absolute;inset:0;background:url(assets/moai.png) center 42% / contain no-repeat;transition:opacity .6s ease;z-index:0}
   .hero.drag{cursor:grabbing}
   .hero::after{content:'';position:absolute;inset:0;pointer-events:none;
     background:radial-gradient(75% 60% at 50% 46%,transparent 35%,rgba(5,7,10,.55) 72%,#05070a 100%)}
@@ -65,6 +65,7 @@
 <body>
 
 <div class="hero" id="hero">
+  <div class="baked" id="baked"></div>
   <canvas id="splat"></canvas>
   <div class="overlay">
     <div class="brand sans">the <em>moai-heads</em></div>
@@ -136,7 +137,9 @@ hero.addEventListener('pointermove',e=>{if(!dragging)return;
   tYaw+=(e.clientX-lx)*0.008;tPitch=Math.max(-0.8,Math.min(0.8,tPitch+(e.clientY-ly)*0.006));lx=e.clientX;ly=e.clientY;active=performance.now();});
 
 const L=[-0.5,0.62,0.6];const camZ=2.5,f=1.62;
+let frames=0;
 function frame(){
+  if(++frames===3){const b=document.getElementById('baked');if(b){b.style.opacity=0;setTimeout(()=>b.remove(),700);}}
   if(!dragging&&performance.now()-active>2400)tYaw+=0.003;
   yaw+=(tYaw-yaw)*0.12;pitch+=(tPitch-pitch)*0.12;
   const cy=Math.cos(yaw),sy=Math.sin(yaw),cp=Math.cos(pitch),sp=Math.sin(pitch);
