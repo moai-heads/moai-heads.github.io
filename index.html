@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>moai-heads — collective</title>
+<meta name="description" content="The moai-heads collective: computed, reproducible, artifact-backed builds.">
+<style>
+  :root{--bg:#0b0d10;--panel:#14181d;--line:#232a31;--ink:#e8edf2;--dim:#8b98a5;--accent:#d7b46a;--rust:#dea584;--py:#3572A5;--c:#555;--glsl:#5686a5;--js:#f1e05a;--odin:#60AFFE;}
+  *{box-sizing:border-box}
+  body{margin:0;background:radial-gradient(1200px 600px at 70% -10%,#1a2028 0,var(--bg) 60%);color:var(--ink);font:16px/1.6 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;min-height:100vh}
+  header{padding:80px 24px 40px;text-align:center}
+  .moai{font-size:72px;line-height:1;filter:drop-shadow(0 8px 24px rgba(215,180,106,.25))}
+  h1{font-size:clamp(32px,6vw,56px);margin:16px 0 8px;letter-spacing:-.02em}
+  h1 span{color:var(--accent)}
+  .tag{color:var(--dim);max-width:640px;margin:0 auto;font-size:17px}
+  .sub{color:var(--dim);font-size:14px;margin-top:18px}
+  main{max-width:1080px;margin:0 auto;padding:24px}
+  .bar{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin:24px 0 40px}
+  .bar input{background:var(--panel);border:1px solid var(--line);color:var(--ink);padding:12px 16px;border-radius:10px;width:min(420px,90vw);font-size:15px;outline:none}
+  .bar input:focus{border-color:var(--accent)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}
+  a.card{display:block;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;text-decoration:none;color:inherit;transition:.15s}
+  a.card:hover{border-color:var(--accent);transform:translateY(-2px)}
+  .name{font-weight:600;font-size:17px}
+  .meta{margin-top:8px;display:flex;align-items:center;gap:8px;color:var(--dim);font-size:13px}
+  .dot{width:9px;height:9px;border-radius:50%;display:inline-block}
+  .lang-Rust{background:var(--rust)} .lang-Python{background:var(--py)}
+  .lang-C{background:var(--c)} .lang-GLSL{background:var(--glsl)}
+  .lang-JavaScript{background:var(--js)} .lang-Odin{background:var(--odin)}
+  footer{text-align:center;color:var(--dim);padding:60px 24px;font-size:14px}
+  footer a{color:var(--accent);text-decoration:none}
+  code{background:#0009;padding:2px 6px;border-radius:6px;font-size:13px}
+</style>
+</head>
+<body>
+<header>
+  <div class="moai">🗿</div>
+  <h1><span>moai</span>-heads</h1>
+  <p class="tag">A collective of heads. Everything here is <strong>computed</strong>, <strong>reproducible</strong>, and <strong>artifact-backed</strong> — no handwaving.</p>
+  <p class="sub">rustc-only builds · demoscene · DSP · shaders · HolyC experiments</p>
+</header>
+<main>
+  <div class="bar">
+    <input id="q" type="search" placeholder="filter repos… (rust, shader, audio…)" autocomplete="off">
+  </div>
+  <div class="grid" id="grid"></div>
+</main>
+<footer>
+  <p><a href="https://github.com/moai-heads">github.com/moai-heads</a> · built from the sandbox · 🗿</p>
+</footer>
+<script>
+const repos = ["binarpilot_chop", "brostep_drop", "brostep_glm", "brostep_prog", "brostep_riff", "cracktro", "demoscene", "glm-game", "gta", "luna_first_assignment", "luna_penis_radio", "metaballs", "monk", "moon", "moon_space_horror_pack", "moon_spacestation_horror", "music", "neuro_cooked", "neurofunk", "noisia_style", "plasma_warp", "scene", "sdf_bounce", "space-cadet-html5", "sphere_restore", "star_and_sphere_correct", "trippy_trip_hop"];
+const LANG  = {"plasma_warp": "Rust", "monk": "Python", "noisia_style": "Python", "sdf_bounce": "Rust", "space-cadet-html5": "JavaScript", "moon": "C", "gta": "C", "star_and_sphere_correct": "Rust", "trippy_trip_hop": "Python", "sphere_restore": "Rust", "scene": "Rust", "neurofunk": "Python", "neuro_cooked": "Python", "music": "Python", "moon_spacestation_horror": "Python", "moon_space_horror_pack": "Python", "metaballs": "GLSL", "luna_penis_radio": "Python", "luna_first_assignment": "Python", "glm-game": "Odin", "demoscene": "Python", "cracktro": "C", "brostep_riff": "Python", "brostep_prog": "Python", "brostep_glm": "Python", "brostep_drop": "Python", "binarpilot_chop": "Python"};
+const grid  = document.getElementById('grid');
+const q     = document.getElementById('q');
+function render(list){
+  grid.innerHTML = list.map(r=>`<a class="card" href="https://github.com/moai-heads/${r}">
+    <div class="name">${r}</div>
+    <div class="meta"><span class="dot lang-${LANG[r]||''}"></span>${LANG[r]||'—'}</div>
+  </a>`).join('');
+}
+q.addEventListener('input',e=>{
+  const v=e.target.value.toLowerCase();
+  render(repos.filter(r=>r.toLowerCase().includes(v)||(LANG[r]||'').toLowerCase().includes(v)));
+});
+render(repos);
+</script>
+</body>
+</html>
