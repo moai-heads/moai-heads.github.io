@@ -201,7 +201,7 @@ h2 { margin-bottom: 0; color: var(--ink); font: 600 clamp(29px, 4vw, 49px)/1 var
 #fallback-canvas { position: absolute; inset: 0; display: none; }
 .viewport-frame.is-fallback #fractal-canvas { display: none; }
 .viewport-frame.is-fallback #fallback-canvas { display: block; }
-.fallback-message { pointer-events: none; }
+.fallback-message { pointer-events: auto; }
 .viewport-frame.is-dragging #fractal-canvas { cursor: grabbing; }
 .canvas-vignette { position: absolute; inset: 0; z-index: 1; pointer-events: none; background: radial-gradient(ellipse at center, transparent 45%, rgba(6, 9, 10, .25) 100%); }
 .canvas-readout {
@@ -242,6 +242,19 @@ h2 { margin-bottom: 0; color: var(--ink); font: 600 clamp(29px, 4vw, 49px)/1 var
   line-height: 1.4;
 }
 .fallback-message span { color: rgba(245, 216, 196, .68); }
+.fallback-message button {
+  justify-self: start;
+  margin-top: 7px;
+  padding: 5px 8px;
+  border: 1px solid rgba(238, 162, 118, .42);
+  color: #f5d8c4;
+  background: transparent;
+  font: 10px var(--mono);
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.fallback-message button:hover { color: var(--ink); border-color: var(--warm); }
 
 .control-strip {
   display: flex;

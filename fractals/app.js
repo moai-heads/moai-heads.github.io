@@ -10,6 +10,9 @@
   const statusDot = $('status-dot');
   const statusText = $('renderer-status');
   const fallbackMessage = $('fallback-message');
+  const fallbackTitle = $('fallback-title');
+  const fallbackDetail = $('fallback-detail');
+  const retryRenderer = $('retry-renderer');
   const els = {
     kicker: $('study-kicker'),
     title: $('study-title'),
@@ -230,7 +233,13 @@
     state.index = index;
     resetView();
     updateStudyUI();
-    if (gl) compileStudy();
+    if (gl) {
+      try {
+        compileStudy();
+      } catch (error) {
+        switchToFallback(`shader compile failed: ${error.message || 'unknown error'}`);
+      }
+    }
   }
 
   function resizeCanvas() {
@@ -473,8 +482,8 @@
       state.dirty = true;
       setStatus(glVersion === 2 ? 'webgl2 · glsl live' : 'webgl · glsl live', 'ready');
     } catch (error) {
-      console.warn('GLSL program failed; using Canvas 2D fallback.', error);
-      switchToFallback(`shader compile failed: ${error.message || 'unknown error'}`);
+      console.warn('GLSL program failed.', error);
+      throw error;
     }
   }
 
@@ -485,14 +494,17 @@
       depth: false,
       stencil: false,
       preserveDrawingBuffer: false,
-      powerPreference: 'high-performance',
+      failIfMajorPerformanceCaveat: false,
+      powerPreference: 'default',
     };
-    gl = canvas.getContext('webgl2', attributes);
-    if (gl) {
-      glVersion = 2;
-    } else {
-      gl = canvas.getContext('webgl', attributes) || canvas.getContext('experimental-webgl', attributes);
-      glVersion = gl ? 1 : 0;
+
+    // Prefer WebGL 1: it is the most compatible GLSL path on older phones and
+    // in embedded browsers. The shader source is converted below when needed.
+    gl = canvas.getContext('webgl', attributes) || canvas.getContext('experimental-webgl', attributes);
+    glVersion = gl ? 1 : 0;
+    if (!gl) {
+      gl = canvas.getContext('webgl2', attributes);
+      glVersion = gl ? 2 : 0;
     }
     if (!gl) throw new Error('WebGL is unavailable');
 
@@ -511,7 +523,7 @@
     canvas.addEventListener('webglcontextlost', (event) => {
       event.preventDefault();
       switchToFallback('webgl context lost');
-    });
+    }, { once: true });
     compileStudy();
   }
 
@@ -520,13 +532,25 @@
     frame.classList.add('is-fallback');
     fallbackMessage.hidden = false;
     setStatus('canvas 2d · reference', 'fallback');
-    fallbackMessage.querySelector('strong').textContent = 'WebGL is unavailable here.';
-    fallbackMessage.querySelector('span').textContent = 'Showing a slower Canvas 2D reference render. The GLSL source is still available below.';
+
+    const message = String(reason || '').toLowerCase();
+    const inEmbeddedBrowser = /discord|instagram|facebook|fbav|fban|line\//i.test(navigator.userAgent);
+    if (message.includes('shader compile')) {
+      fallbackTitle.textContent = 'This browser rejected the GLSL shader.';
+      fallbackDetail.textContent = 'The live Canvas 2D preview is still running. Try Safari or Chrome for the GPU version.';
+    } else if (inEmbeddedBrowser) {
+      fallbackTitle.textContent = 'This in-app browser has WebGL turned off.';
+      fallbackDetail.textContent = 'GitHub Pages allows WebGL. Use “Open in browser” to launch the GLSL version in Safari or Chrome.';
+    } else {
+      fallbackTitle.textContent = 'WebGL is unavailable in this browser.';
+      fallbackDetail.textContent = 'GitHub Pages is not blocking it. Try Safari or Chrome with hardware acceleration enabled.';
+    }
+
     console.info(reason);
     if (gl && renderer?.program) gl.deleteProgram(renderer.program);
     gl = null;
     renderer = null;
-    fallbackContext = fallbackCanvas.getContext('2d', { alpha: false });
+    fallbackContext = fallbackCanvas.getContext('2d', { alpha: false, willReadFrequently: true });
     resizeCanvas();
     state.dirty = true;
   }
@@ -732,6 +756,7 @@
     els.iterations.addEventListener('input', (event) => setIterations(event.target.value));
     els.palette.addEventListener('input', (event) => setPalette(event.target.value));
     els.copy.addEventListener('click', copyShader);
+    retryRenderer.addEventListener('click', () => window.location.reload());
     window.addEventListener('resize', () => {
       state.dpr = Math.min(window.devicePixelRatio || 1, 2);
       state.dirty = true;

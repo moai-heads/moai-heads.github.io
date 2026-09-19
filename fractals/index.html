@@ -68,8 +68,9 @@
             </div>
             <div class="canvas-help" id="canvas-help">drag / pinch to explore&nbsp;&nbsp; · &nbsp;&nbsp;scroll to zoom</div>
             <div class="fallback-message" id="fallback-message" hidden>
-              <strong>WebGL is unavailable here.</strong>
-              <span>Showing a slower Canvas 2D reference render. The GLSL source is still available below.</span>
+              <strong id="fallback-title">WebGL is unavailable in this viewer.</strong>
+              <span id="fallback-detail">Showing a slower Canvas 2D reference render. The GLSL source is still available below.</span>
+              <button id="retry-renderer" type="button">retry renderer</button>
             </div>
           </div>
 
