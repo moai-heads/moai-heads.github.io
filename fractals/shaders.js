@@ -60,7 +60,7 @@ void main() {
   int escaped = 0;
   float magnitude = 0.0;
 
-  for (int i = 0; i < 4096; i++) {
+  for (int i = 0; i < 1024; i++) {
     if (float(i) >= u_iterations) break;
     z = complexSquare(z) + c;
     magnitude = dot(z, z);
@@ -90,7 +90,7 @@ void main() {
   int escaped = 0;
   float magnitude = 0.0;
 
-  for (int i = 0; i < 4096; i++) {
+  for (int i = 0; i < 1024; i++) {
     if (float(i) >= u_iterations) break;
     z = complexSquare(z) + c;
     magnitude = dot(z, z);
@@ -120,7 +120,7 @@ void main() {
   int escaped = 0;
   float magnitude = 0.0;
 
-  for (int i = 0; i < 4096; i++) {
+  for (int i = 0; i < 1024; i++) {
     if (float(i) >= u_iterations) break;
     z = complexSquare(abs(z)) + c;
     magnitude = dot(z, z);
@@ -149,7 +149,7 @@ void main() {
   int escaped = 0;
   float magnitude = 0.0;
 
-  for (int i = 0; i < 4096; i++) {
+  for (int i = 0; i < 1024; i++) {
     if (float(i) >= u_iterations) break;
     z = vec2(z.x * z.x - z.y * z.y, -2.0 * z.x * z.y) + c;
     magnitude = dot(z, z);
@@ -178,7 +178,7 @@ void main() {
   int steps = 0;
   bool converged = false;
 
-  for (int i = 0; i < 4096; i++) {
+  for (int i = 0; i < 1024; i++) {
     if (float(i) >= u_iterations) break;
     vec2 z2 = complexSquare(z);
     vec2 f = complexMul(z2, z) - vec2(1.0, 0.0);

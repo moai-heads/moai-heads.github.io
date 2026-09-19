@@ -4,6 +4,10 @@
 
   const $ = (id) => document.getElementById(id);
   const canvas = $('fractal-canvas');
+  const isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent)
+    || window.matchMedia?.('(pointer: coarse)').matches;
+  const maxDpr = () => Math.min(window.devicePixelRatio || 1, isMobile ? 1.25 : 2);
+  const MAX_SHADER_ITERATIONS = 1024;
   const fallbackCanvas = $('fallback-canvas');
   const frame = $('viewport-frame');
   const list = $('fractal-list');
@@ -136,15 +140,16 @@
     time: 0,
     lastFrame: performance.now(),
     lastFallback: 0,
+    lastRender: 0,
     paused: false,
     dirty: true,
-    iterations: 240,
+    iterations: isMobile ? 160 : 240,
     palette: 1.7,
     center: [-0.5, 0],
     scale: 1.55,
     param: [0, 0],
     pointer: [0, 0],
-    dpr: Math.min(window.devicePixelRatio || 1, 2),
+    dpr: maxDpr(),
     dragging: false,
     dragStart: null,
     pointers: new Map(),
@@ -498,13 +503,14 @@
       powerPreference: 'default',
     };
 
-    // Prefer WebGL 1: it is the most compatible GLSL path on older phones and
-    // in embedded browsers. The shader source is converted below when needed.
-    gl = canvas.getContext('webgl', attributes) || canvas.getContext('experimental-webgl', attributes);
-    glVersion = gl ? 1 : 0;
+    // WebGL2 is the primary renderer. WebGL1 remains only as a compatibility
+    // fallback for older browsers; the mobile fix is reduced GPU load, not a
+    // downgrade of the gallery's shader model.
+    gl = canvas.getContext('webgl2', attributes);
+    glVersion = gl ? 2 : 0;
     if (!gl) {
-      gl = canvas.getContext('webgl2', attributes);
-      glVersion = gl ? 2 : 0;
+      gl = canvas.getContext('webgl', attributes) || canvas.getContext('experimental-webgl', attributes);
+      glVersion = gl ? 1 : 0;
     }
     if (!gl) throw new Error('WebGL is unavailable');
 
@@ -535,7 +541,10 @@
 
     const message = String(reason || '').toLowerCase();
     const inEmbeddedBrowser = /discord|instagram|facebook|fbav|fban|line\//i.test(navigator.userAgent);
-    if (message.includes('shader compile')) {
+    if (message.includes('context lost')) {
+      fallbackTitle.textContent = 'The mobile GPU context was reset.';
+      fallbackDetail.textContent = 'The shader is valid, but this device stopped the first render. The reference preview is running at a safer load.';
+    } else if (message.includes('shader compile')) {
       fallbackTitle.textContent = 'This browser rejected the GLSL shader.';
       fallbackDetail.textContent = 'The live Canvas 2D preview is still running. Try Safari or Chrome for the GPU version.';
     } else if (inEmbeddedBrowser) {
@@ -711,9 +720,11 @@
     state.dirty = false;
   }
 
-  function renderGL() {
+  function renderGL(now) {
     if (!gl || !renderer?.program) return;
+    const frameInterval = isMobile ? 1000 / 30 : 1000 / 60;
     if (state.paused && !state.dirty) return;
+    if (!state.dirty && now - state.lastRender < frameInterval) return;
     const { width, height } = resizeCanvas();
     gl.viewport(0, 0, width, height);
     gl.clearColor(0.01, 0.014, 0.014, 1);
@@ -725,13 +736,14 @@
     const u = renderer.uniforms;
     gl.uniform2f(u.resolution, width, height);
     gl.uniform1f(u.time, state.time);
-    gl.uniform1f(u.iterations, state.iterations);
+    gl.uniform1f(u.iterations, Math.min(state.iterations, MAX_SHADER_ITERATIONS));
     gl.uniform2f(u.center, state.center[0], state.center[1]);
     gl.uniform1f(u.scale, state.scale);
     gl.uniform1f(u.palette, state.palette);
     gl.uniform2f(u.param, state.param[0], state.param[1]);
     gl.uniform2f(u.pointer, state.pointer[0], state.pointer[1]);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
+    state.lastRender = now;
     state.dirty = false;
   }
 
@@ -740,7 +752,7 @@
     state.lastFrame = now;
     if (!state.paused) state.time += delta;
     if (fallback) renderFallback(now);
-    else renderGL();
+    else renderGL(now);
     requestAnimationFrame(frameLoop);
   }
 
@@ -758,7 +770,7 @@
     els.copy.addEventListener('click', copyShader);
     retryRenderer.addEventListener('click', () => window.location.reload());
     window.addEventListener('resize', () => {
-      state.dpr = Math.min(window.devicePixelRatio || 1, 2);
+      state.dpr = maxDpr();
       state.dirty = true;
       resizeCanvas();
     });
