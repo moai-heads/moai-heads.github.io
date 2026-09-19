@@ -1,4 +1,4 @@
-/* Fractal Field — a no-build WebGPU/WGSL gallery. */
+/* Fractal Field — a no-build WebGL/GLSL gallery. */
 (() => {
   'use strict';
 
@@ -46,7 +46,7 @@
       note: 'The border is not a line but a record of how quickly each orbit escapes. Smooth coloring turns that escape time into the flame-like bands around the set.',
       technique: 'complex iteration + smooth escape',
       interaction: 'pan · zoom · inspect orbit time',
-      filename: 'mandelbrot.wgsl',
+      filename: 'mandelbrot.glsl',
       center: [-0.5, 0],
       scale: 1.55,
       param: [0, 0],
@@ -61,7 +61,7 @@
       note: 'This study keeps c fixed at a filament-rich value so the canvas can be read as a single dynamical creature rather than a parameter sweep.',
       technique: 'complex iteration + fixed parameter',
       interaction: 'pan · zoom · fixed c',
-      filename: 'julia.wgsl',
+      filename: 'julia.glsl',
       center: [0, 0],
       scale: 1.55,
       param: [-0.745, 0.113],
@@ -76,7 +76,7 @@
       note: 'The famous ship appears below the real axis in the conventional view. The asymmetry is the equation made visible: reflection happens before the complex square.',
       technique: 'folded complex iteration',
       interaction: 'pan · zoom · inspect folds',
-      filename: 'burning-ship.wgsl',
+      filename: 'burning-ship.glsl',
       center: [-0.45, -0.52],
       scale: 1.42,
       param: [0, 0],
@@ -91,7 +91,7 @@
       note: 'Conjugation flips the sign of the imaginary component on every pass. The result is a fractal whose geometry remembers the mirror operation at every scale.',
       technique: 'conjugate complex iteration',
       interaction: 'pan · zoom · mirror dynamics',
-      filename: 'tricorn.wgsl',
+      filename: 'tricorn.glsl',
       center: [-0.35, 0],
       scale: 1.52,
       param: [0, 0],
@@ -106,7 +106,7 @@
       note: 'Color identifies the root reached; brightness records how quickly the iteration converged. The dark seams are points balanced between competing answers.',
       technique: 'Newton–Raphson iteration',
       interaction: 'pan · zoom · follow convergence',
-      filename: 'newton.wgsl',
+      filename: 'newton.glsl',
       center: [0, 0],
       scale: 1.75,
       param: [0, 0],
@@ -121,7 +121,7 @@
       note: 'This version uses a fixed-point test in the shader rather than a texture or a pre-rendered pattern. The recursion is evaluated per pixel, so the carpet stays procedural at every zoom.',
       technique: 'iterated function system',
       interaction: 'pan · zoom · recursive scan',
-      filename: 'sierpinski-carpet.wgsl',
+      filename: 'sierpinski-carpet.glsl',
       center: [0, 0],
       scale: 2.2,
       param: [0, 0],
@@ -144,13 +144,16 @@
     dpr: Math.min(window.devicePixelRatio || 1, 2),
     dragging: false,
     dragStart: null,
+    pointers: new Map(),
+    pinch: null,
     interacted: false,
   };
 
-  let gpu = null;
-  let gpuReady = false;
+  let gl = null;
+  let glVersion = 0;
+  let renderer = null;
   let fallback = false;
-  let compileSerial = 0;
+  let fragmentPrecision = 'highp';
   let fallbackContext = null;
 
   function setStatus(text, kind = '') {
@@ -227,7 +230,7 @@
     state.index = index;
     resetView();
     updateStudyUI();
-    if (gpuReady) await compileStudy();
+    if (gl) compileStudy();
   }
 
   function resizeCanvas() {
@@ -237,7 +240,6 @@
     let width = Math.max(1, Math.floor(cssWidth * state.dpr));
     let height = Math.max(1, Math.floor(cssHeight * state.dpr));
 
-    // CPU fallback is intentionally bounded so an unsupported device stays responsive.
     if (fallback) {
       const maxPixels = 620 * 480;
       const ratio = Math.min(1, Math.sqrt(maxPixels / (width * height)));
@@ -292,23 +294,51 @@
     updateReadout(clientX, clientY);
   }
 
+  function pointerPair() {
+    return [...state.pointers.values()].slice(0, 2);
+  }
+
   function onPointerDown(event) {
-    if (event.button !== undefined && event.button !== 0) return;
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    event.preventDefault();
     markInteracted();
-    state.dragging = true;
-    state.dragStart = {
-      x: event.clientX,
-      y: event.clientY,
-      center: [...state.center],
-    };
-    frame.classList.add('is-dragging');
+    state.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
     frame.setPointerCapture?.(event.pointerId);
+
+    if (state.pointers.size === 1) {
+      state.dragging = true;
+      state.dragStart = {
+        x: event.clientX,
+        y: event.clientY,
+        center: [...state.center],
+      };
+    } else if (state.pointers.size === 2) {
+      state.dragging = false;
+      const [a, b] = pointerPair();
+      state.pinch = { lastDistance: Math.hypot(a.x - b.x, a.y - b.y) };
+    }
+    frame.classList.toggle('is-dragging', state.dragging);
   }
 
   function onPointerMove(event) {
+    if (state.pointers.has(event.pointerId)) {
+      state.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    }
     state.pointer = normalizedPointer(event.clientX, event.clientY);
     updateReadout(event.clientX, event.clientY);
-    if (!state.dragging || !state.dragStart) return;
+
+    if (state.pointers.size >= 2 && state.pinch) {
+      const [a, b] = pointerPair();
+      const midpoint = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+      const distance = Math.hypot(a.x - b.x, a.y - b.y);
+      if (distance > 0 && state.pinch.lastDistance > 0) {
+        zoomAt(midpoint.x, midpoint.y, state.pinch.lastDistance / distance);
+      }
+      state.pinch.lastDistance = distance;
+      return;
+    }
+
+    if (!state.dragging || !state.dragStart || state.pointers.size !== 1) return;
     const rect = frame.getBoundingClientRect();
     const aspect = rect.width / rect.height;
     state.center[0] = state.dragStart.center[0] - ((event.clientX - state.dragStart.x) / rect.width) * 2 * aspect * state.scale;
@@ -317,10 +347,18 @@
   }
 
   function onPointerUp(event) {
-    state.dragging = false;
-    state.dragStart = null;
-    frame.classList.remove('is-dragging');
+    state.pointers.delete(event.pointerId);
     frame.releasePointerCapture?.(event.pointerId);
+    state.pinch = null;
+    if (state.pointers.size === 1) {
+      const [point] = pointerPair();
+      state.dragging = true;
+      state.dragStart = { x: point.x, y: point.y, center: [...state.center] };
+    } else {
+      state.dragging = false;
+      state.dragStart = null;
+    }
+    frame.classList.toggle('is-dragging', state.dragging);
   }
 
   function onWheel(event) {
@@ -372,88 +410,122 @@
     try { document.execCommand('copy'); done(); } finally { area.remove(); }
   }
 
-  function configureGPU() {
-    if (!gpu) return;
-    const { width, height } = resizeCanvas();
-    gpu.context.configure({
-      device: gpu.device,
-      format: gpu.format,
-      alphaMode: 'opaque',
-    });
-    gpu.size = { width, height };
+  function shaderSource(source, type) {
+    if (glVersion === 2) return source;
+    let converted = source.replace(/^#version 300 es\s*/m, '');
+    if (type === 'vertex') {
+      return converted
+        .replace(/\bin vec2 a_position\b/g, 'attribute vec2 a_position')
+        .replace(/\bout vec2 v_uv\b/g, 'varying vec2 v_uv');
+    }
+    converted = converted
+      .replace(/\bin vec2 v_uv\b/g, 'varying vec2 v_uv')
+      .replace(/\bout vec4 fragColor;\s*/g, '')
+      .replace(/\bfragColor\b/g, 'gl_FragColor');
+    if (fragmentPrecision === 'mediump') converted = converted.replace('precision highp float;', 'precision mediump float;');
+    return converted;
   }
 
-  async function compileStudy() {
-    if (!gpu) return;
-    const serial = ++compileSerial;
-    const source = SHADERS[currentStudy().key];
+  function compileShader(type, source) {
+    const shader = gl.createShader(type);
+    gl.shaderSource(shader, shaderSource(source, type === gl.VERTEX_SHADER ? 'vertex' : 'fragment'));
+    gl.compileShader(shader);
+    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+      const message = gl.getShaderInfoLog(shader) || 'unknown shader compile error';
+      gl.deleteShader(shader);
+      throw new Error(message);
+    }
+    return shader;
+  }
+
+  function compileStudy() {
+    if (!gl) return;
+    const study = currentStudy();
     try {
-      const module = gpu.device.createShaderModule({ code: source });
-      const pipeline = gpu.device.createRenderPipeline({
-        layout: 'auto',
-        vertex: { module, entryPoint: 'vertex_main' },
-        fragment: {
-          module,
-          entryPoint: 'fragment_main',
-          targets: [{ format: gpu.format }],
+      const vertex = compileShader(gl.VERTEX_SHADER, GLSL_VERTEX_SHADER);
+      const fragment = compileShader(gl.FRAGMENT_SHADER, SHADERS[study.key]);
+      const program = gl.createProgram();
+      gl.attachShader(program, vertex);
+      gl.attachShader(program, fragment);
+      gl.linkProgram(program);
+      gl.deleteShader(vertex);
+      gl.deleteShader(fragment);
+      if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+        const message = gl.getProgramInfoLog(program) || 'unknown program link error';
+        gl.deleteProgram(program);
+        throw new Error(message);
+      }
+      if (renderer?.program) gl.deleteProgram(renderer.program);
+      renderer = {
+        program,
+        position: gl.getAttribLocation(program, 'a_position'),
+        uniforms: {
+          resolution: gl.getUniformLocation(program, 'u_resolution'),
+          time: gl.getUniformLocation(program, 'u_time'),
+          iterations: gl.getUniformLocation(program, 'u_iterations'),
+          center: gl.getUniformLocation(program, 'u_center'),
+          scale: gl.getUniformLocation(program, 'u_scale'),
+          palette: gl.getUniformLocation(program, 'u_palette'),
+          param: gl.getUniformLocation(program, 'u_param'),
+          pointer: gl.getUniformLocation(program, 'u_pointer'),
         },
-        primitive: { topology: 'triangle-list' },
-      });
-      if (serial !== compileSerial) return;
-      gpu.pipeline = pipeline;
-      gpu.bindGroup = gpu.device.createBindGroup({
-        layout: pipeline.getBindGroupLayout(0),
-        entries: [{ binding: 0, resource: { buffer: gpu.uniformBuffer } }],
-      });
+      };
       state.dirty = true;
-      setStatus('webgpu · live', 'ready');
+      setStatus(glVersion === 2 ? 'webgl2 · glsl live' : 'webgl · glsl live', 'ready');
     } catch (error) {
-      console.warn('WGSL pipeline failed; using CPU fallback.', error);
+      console.warn('GLSL program failed; using Canvas 2D fallback.', error);
       switchToFallback(`shader compile failed: ${error.message || 'unknown error'}`);
     }
   }
 
-  async function initGPU() {
-    if (!navigator.gpu) throw new Error('navigator.gpu is unavailable');
-    const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
-    if (!adapter) throw new Error('no WebGPU adapter was found');
-    const device = await adapter.requestDevice();
-    const context = canvas.getContext('webgpu');
-    if (!context) throw new Error('webgpu canvas context is unavailable');
-    const format = navigator.gpu.getPreferredCanvasFormat();
-    gpu = {
-      adapter,
-      device,
-      context,
-      format,
-      uniformBuffer: device.createBuffer({
-        size: 48,
-        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-      }),
-      pipeline: null,
-      bindGroup: null,
-      size: { width: 1, height: 1 },
+  function initGL() {
+    const attributes = {
+      alpha: false,
+      antialias: false,
+      depth: false,
+      stencil: false,
+      preserveDrawingBuffer: false,
+      powerPreference: 'high-performance',
     };
-    device.lost.then((info) => {
-      console.warn('WebGPU device lost', info);
-      switchToFallback('gpu device lost');
-    });
-    configureGPU();
-    gpuReady = true;
+    gl = canvas.getContext('webgl2', attributes);
+    if (gl) {
+      glVersion = 2;
+    } else {
+      gl = canvas.getContext('webgl', attributes) || canvas.getContext('experimental-webgl', attributes);
+      glVersion = gl ? 1 : 0;
+    }
+    if (!gl) throw new Error('WebGL is unavailable');
+
+    const precision = gl.getShaderPrecisionFormat?.(gl.FRAGMENT_SHADER, gl.HIGH_FLOAT);
+    if (!precision || precision.precision === 0) fragmentPrecision = 'mediump';
+    gl.disable(gl.DEPTH_TEST);
+    gl.disable(gl.BLEND);
+    const buffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+    renderer = { buffer };
     fallback = false;
+    frame.classList.remove('is-fallback');
     fallbackMessage.hidden = true;
-    await compileStudy();
+    resizeCanvas();
+    canvas.addEventListener('webglcontextlost', (event) => {
+      event.preventDefault();
+      switchToFallback('webgl context lost');
+    });
+    compileStudy();
   }
 
   function switchToFallback(reason) {
     fallback = true;
-    gpuReady = false;
     frame.classList.add('is-fallback');
     fallbackMessage.hidden = false;
     setStatus('canvas 2d · reference', 'fallback');
-    fallbackMessage.querySelector('strong').textContent = 'WebGPU is unavailable here.';
-    fallbackMessage.querySelector('span').textContent = 'Showing a slower Canvas 2D reference render. The WGSL source is still available below.';
+    fallbackMessage.querySelector('strong').textContent = 'WebGL is unavailable here.';
+    fallbackMessage.querySelector('span').textContent = 'Showing a slower Canvas 2D reference render. The GLSL source is still available below.';
     console.info(reason);
+    if (gl && renderer?.program) gl.deleteProgram(renderer.program);
+    gl = null;
+    renderer = null;
     fallbackContext = fallbackCanvas.getContext('2d', { alpha: false });
     resizeCanvas();
     state.dirty = true;
@@ -462,11 +534,10 @@
   function paletteColor(t, shift) {
     const phase = [0.02, 0.24, 0.51];
     const speed = [0.94, 0.67, 0.46];
-    const rgb = phase.map((p, index) => {
+    return phase.map((p, index) => {
       const value = 0.5 + 0.5 * Math.cos(Math.PI * 2 * (p + shift / (Math.PI * 2) + t * speed[index]));
       return Math.max(0, Math.min(1, value));
     });
-    return rgb;
   }
 
   function writePixel(data, index, rgb, gain = 1) {
@@ -566,7 +637,7 @@
         ax = Math.abs(ax);
         ay = Math.abs(ay);
       }
-      let nextX = ax * ax - ay * ay;
+      const nextX = ax * ax - ay * ay;
       let nextY = 2 * ax * ay;
       if (study.key === 'tricorn') nextY = -2 * ax * ay;
       zx = nextX + cX;
@@ -616,35 +687,27 @@
     state.dirty = false;
   }
 
-  function renderGPU() {
-    if (!gpu?.pipeline || !gpu.bindGroup) return;
+  function renderGL() {
+    if (!gl || !renderer?.program) return;
+    if (state.paused && !state.dirty) return;
     const { width, height } = resizeCanvas();
-    if (gpu.size.width !== width || gpu.size.height !== height) configureGPU();
-    const uniformData = new Float32Array([
-      width, height,
-      state.time,
-      state.iterations,
-      state.center[0], state.center[1],
-      state.scale,
-      state.palette,
-      state.param[0], state.param[1],
-      state.pointer[0], state.pointer[1],
-    ]);
-    gpu.device.queue.writeBuffer(gpu.uniformBuffer, 0, uniformData);
-    const encoder = gpu.device.createCommandEncoder();
-    const pass = encoder.beginRenderPass({
-      colorAttachments: [{
-        view: gpu.context.getCurrentTexture().createView(),
-        clearValue: { r: 0.01, g: 0.014, b: 0.014, a: 1 },
-        loadOp: 'clear',
-        storeOp: 'store',
-      }],
-    });
-    pass.setPipeline(gpu.pipeline);
-    pass.setBindGroup(0, gpu.bindGroup);
-    pass.draw(3);
-    pass.end();
-    gpu.device.queue.submit([encoder.finish()]);
+    gl.viewport(0, 0, width, height);
+    gl.clearColor(0.01, 0.014, 0.014, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.useProgram(renderer.program);
+    gl.bindBuffer(gl.ARRAY_BUFFER, renderer.buffer);
+    gl.enableVertexAttribArray(renderer.position);
+    gl.vertexAttribPointer(renderer.position, 2, gl.FLOAT, false, 0, 0);
+    const u = renderer.uniforms;
+    gl.uniform2f(u.resolution, width, height);
+    gl.uniform1f(u.time, state.time);
+    gl.uniform1f(u.iterations, state.iterations);
+    gl.uniform2f(u.center, state.center[0], state.center[1]);
+    gl.uniform1f(u.scale, state.scale);
+    gl.uniform1f(u.palette, state.palette);
+    gl.uniform2f(u.param, state.param[0], state.param[1]);
+    gl.uniform2f(u.pointer, state.pointer[0], state.pointer[1]);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
     state.dirty = false;
   }
 
@@ -653,7 +716,7 @@
     state.lastFrame = now;
     if (!state.paused) state.time += delta;
     if (fallback) renderFallback(now);
-    else if (gpuReady) renderGPU();
+    else renderGL();
     requestAnimationFrame(frameLoop);
   }
 
@@ -672,28 +735,26 @@
     window.addEventListener('resize', () => {
       state.dpr = Math.min(window.devicePixelRatio || 1, 2);
       state.dirty = true;
-      if (gpuReady) configureGPU();
-      else if (fallback) resizeCanvas();
+      resizeCanvas();
     });
     if ('ResizeObserver' in window) {
       new ResizeObserver(() => {
         state.dirty = true;
-        if (gpuReady) configureGPU();
-        else if (fallback) resizeCanvas();
+        resizeCanvas();
       }).observe(frame);
     }
   }
 
-  async function boot() {
+  function boot() {
     buildCatalog();
     updateStudyUI();
     attachEvents();
     setStatus('checking renderer');
     try {
-      await initGPU();
+      initGL();
     } catch (error) {
-      console.info('WebGPU unavailable; using fallback.', error);
-      switchToFallback(error.message || 'webgpu unavailable');
+      console.info('WebGL unavailable; using Canvas 2D fallback.', error);
+      switchToFallback(error.message || 'webgl unavailable');
     }
     requestAnimationFrame(frameLoop);
   }

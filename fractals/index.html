@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#0b0d0f">
-  <meta name="description" content="Fractal Field — an interactive WGSL and WebGPU field guide by moai-heads.">
-  <title>Fractal Field — WGSL studies</title>
+  <meta name="description" content="Fractal Field — an interactive GLSL and WebGL field guide by moai-heads.">
+  <title>Fractal Field — GLSL studies</title>
   <link rel="stylesheet" href="styles.css">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22%3E%3Crect width=%2264%22 height=%2264%22 rx=%2214%22 fill=%22%230b0d0f%22/%3E%3Cpath d=%22M14 45V22l18-8 18 8v23H14Zm8-8h20v-9H22v9Z%22 fill=%22%23c4e66c%22/%3E%3C/svg%3E">
 </head>
@@ -25,7 +25,7 @@
     <main>
       <section class="intro" aria-labelledby="page-title">
         <div class="intro-copy">
-          <p class="eyebrow">interactive field guide <span>·</span> wgsl / webgpu</p>
+          <p class="eyebrow">interactive field guide <span>·</span> glsl / webgl</p>
           <h1 id="page-title">Fractal <i>field</i></h1>
           <p class="intro-lede">Six infinite rules, folded into one canvas. Explore the boundary between order and noise, then open the shader that makes each image move.</p>
         </div>
@@ -60,16 +60,16 @@
 
           <div class="viewport-frame" id="viewport-frame">
             <canvas id="fallback-canvas" aria-hidden="true"></canvas>
-            <canvas id="fractal-canvas" aria-label="Interactive fractal canvas"></canvas>
+            <canvas id="fractal-canvas" aria-label="Interactive GLSL fractal canvas"></canvas>
             <div class="canvas-vignette"></div>
             <div class="canvas-readout" aria-hidden="true">
               <span id="canvas-coordinate">x −0.5000&nbsp;&nbsp; y 0.0000</span>
               <span id="canvas-zoom">1.00×</span>
             </div>
-            <div class="canvas-help" id="canvas-help">drag to pan&nbsp;&nbsp; · &nbsp;&nbsp;scroll to zoom</div>
+            <div class="canvas-help" id="canvas-help">drag / pinch to explore&nbsp;&nbsp; · &nbsp;&nbsp;scroll to zoom</div>
             <div class="fallback-message" id="fallback-message" hidden>
-              <strong>WebGPU is unavailable here.</strong>
-              <span>Showing a slower Canvas 2D reference render. The WGSL source is still available below.</span>
+              <strong>WebGL is unavailable here.</strong>
+              <span>Showing a slower Canvas 2D reference render. The GLSL source is still available below.</span>
             </div>
           </div>
 
@@ -112,12 +112,12 @@
             <div class="code-heading">
               <div>
                 <p class="eyebrow">the instrument</p>
-                <h2 id="code-heading">WGSL fragment</h2>
+                <h2 id="code-heading">GLSL fragment</h2>
               </div>
               <button class="copy-button" type="button" id="copy-button"><span>⧉</span> copy shader</button>
             </div>
             <div class="code-frame">
-              <div class="code-meta"><span id="code-filename">mandelbrot.wgsl</span><span>fragment stage · live</span></div>
+              <div class="code-meta"><span id="code-filename">mandelbrot.glsl</span><span>fragment stage · live</span></div>
               <pre class="shader-code" tabindex="0"><code id="shader-code"></code></pre>
             </div>
           </section>
