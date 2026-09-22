@@ -215,6 +215,62 @@ void main() {
   fragColor = linearToScreen(rootColor * (0.18 + 0.95 * speed) + halo);
 }`,
 
+  lyapunov: `${GLSL_FRAGMENT_HEADER}
+
+void main() {
+  float aspect = u_resolution.x / u_resolution.y;
+  vec2 screen = (v_uv * 2.0 - 1.0) * vec2(aspect, 1.0);
+  vec2 ab = u_center + screen * u_scale;
+  float a = ab.x;
+  float b = ab.y;
+  float x = 0.5;
+  float exponentSum = 0.0;
+  const int warmup = 96;
+  int sampleCount = clamp(int(u_iterations), 48, 800);
+  int totalSteps = warmup + sampleCount;
+  bool diverged = false;
+
+  for (int i = 0; i < 1024; i++) {
+    if (i >= totalSteps) break;
+    int phase = i % 6;
+    float r = (phase == 0 || phase == 1 || phase == 3) ? a : b;
+    float derivative = abs(r * (1.0 - 2.0 * x));
+    x = r * x * (1.0 - x);
+    if (abs(x) > 1000000.0) {
+      diverged = true;
+      break;
+    }
+    if (i >= warmup) {
+      exponentSum += log(max(derivative, 0.0000001));
+    }
+  }
+
+  float exponent = diverged ? 0.9 : exponentSum / float(sampleCount);
+  vec3 deep = vec3(0.012, 0.025, 0.11);
+  vec3 violet = vec3(0.39, 0.12, 0.53);
+  vec3 gold = vec3(1.0, 0.71, 0.39);
+  vec3 teal = vec3(0.16, 0.86, 0.75);
+  vec3 blue = vec3(0.34, 0.40, 0.98);
+  vec3 color;
+
+  if (exponent < 0.0) {
+    float t = smoothstep(-1.2, 0.0, exponent);
+    color = t < 0.62
+      ? mix(deep, violet, t / 0.62)
+      : mix(violet, gold, (t - 0.62) / 0.38);
+  } else {
+    float t = smoothstep(0.0, 0.85, exponent);
+    color = t < 0.68
+      ? mix(gold, teal, t / 0.68)
+      : mix(teal, blue, (t - 0.68) / 0.32);
+  }
+
+  float contour = 0.91 + 0.09 * (0.5 + 0.5 * cos(exponent * 85.0));
+  vec3 paletteColor = palette(0.48 + exponent * 0.16, u_palette);
+  color = mix(color, paletteColor, 0.16) * contour;
+  fragColor = linearToScreen(color);
+}`,
+
   sierpinski: `${GLSL_FRAGMENT_HEADER}
 
 float carpetValue(vec2 p) {

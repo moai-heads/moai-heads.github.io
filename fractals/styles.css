@@ -352,3 +352,6 @@ h2 { margin-bottom: 0; color: var(--ink); font: 600 clamp(29px, 4vw, 49px)/1 var
   .viewport-frame, #fractal-canvas, #fallback-canvas { min-height: 360px; height: 360px; }
   .canvas-readout { display: grid; gap: 1px; }
 }
+
+.control-button:disabled { opacity: .48; cursor: default; }
+.control-button:disabled:hover { color: var(--muted); }

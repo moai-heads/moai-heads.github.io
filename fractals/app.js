@@ -133,6 +133,22 @@
       scale: 2.2,
       param: [0, 0],
     },
+    {
+      key: 'lyapunov',
+      name: 'Lyapunov plane',
+      family: 'dynamical stability',
+      kicker: 'study 07 / Lyapunov spectrum',
+      equation: 'xₙ₊₁ = rₙxₙ(1 − xₙ)  ·  rₙ follows AABABB',
+      theory: 'Each pixel chooses two logistic-map parameters, A and B. The map alternates them in the repeating sequence AABABB, then measures the average Lyapunov exponent: the mean logarithmic growth rate of nearby orbits. Negative values settle into order; positive values diverge into chaos.',
+      note: 'Color encodes the exponent. The lacework is the boundary between stable and chaotic behavior—not an escape-time image. Drag to scan the parameter plane; increase iterations to sharpen the estimate.',
+      technique: 'periodically forced logistic map',
+      interaction: 'pan · zoom · inspect stability',
+      filename: 'lyapunov-aababb.glsl',
+      center: [3.25, 3.25],
+      scale: 0.75,
+      param: [0, 0],
+      animated: false,
+    },
   ];
 
   const state = {
@@ -220,6 +236,11 @@
     els.iterationsOutput.textContent = String(state.iterations);
     els.palette.value = String(state.palette);
     els.paletteOutput.textContent = Number(state.palette).toFixed(2);
+    const animated = study.animated !== false;
+    els.pause.disabled = !animated;
+    els.pause.title = animated ? 'Pause animation' : 'This study is a static computation';
+    els.pauseIcon.textContent = animated ? (state.paused ? '▶' : 'Ⅱ') : '·';
+    els.pauseLabel.textContent = animated ? (state.paused ? 'play' : 'pause') : 'static';
     updateReadout();
   }
 
@@ -251,11 +272,12 @@
     const rect = frame.getBoundingClientRect();
     const cssWidth = Math.max(1, Math.floor(rect.width));
     const cssHeight = Math.max(1, Math.floor(rect.height));
-    let width = Math.max(1, Math.floor(cssWidth * state.dpr));
-    let height = Math.max(1, Math.floor(cssHeight * state.dpr));
+    const renderDpr = currentStudy().key === 'lyapunov' ? Math.min(state.dpr, 1) : state.dpr;
+    let width = Math.max(1, Math.floor(cssWidth * renderDpr));
+    let height = Math.max(1, Math.floor(cssHeight * renderDpr));
 
     if (fallback) {
-      const maxPixels = 620 * 480;
+      const maxPixels = currentStudy().key === 'lyapunov' ? 300 * 220 : 620 * 480;
       const ratio = Math.min(1, Math.sqrt(maxPixels / (width * height)));
       width = Math.max(1, Math.floor(width * ratio));
       height = Math.max(1, Math.floor(height * ratio));
@@ -641,6 +663,46 @@
       return { rgb: colors[nearest].map((v, i) => v * (0.18 + 0.95 * speed) + halo[i]), gain: 1 };
     }
 
+    if (study.key === 'lyapunov') {
+      let x = 0.5;
+      let sum = 0;
+      const warmup = 72;
+      const samples = Math.min(maxIter, 120);
+      let diverged = false;
+      for (let i = 0; i < warmup + samples; i += 1) {
+        const phase = i % 6;
+        const r = phase === 0 || phase === 1 || phase === 3 ? px : py;
+        const derivative = Math.abs(r * (1 - 2 * x));
+        x = r * x * (1 - x);
+        if (!Number.isFinite(x) || Math.abs(x) > 1e6) {
+          diverged = true;
+          break;
+        }
+        if (i >= warmup) sum += Math.log(Math.max(derivative, 1e-7));
+      }
+      const exponent = diverged ? 0.9 : sum / samples;
+      let rgb;
+      if (exponent < 0) {
+        const t = Math.max(0, Math.min(1, (exponent + 1.2) / 1.2));
+        const u = t * t * (3 - 2 * t);
+        const low = [0.012, 0.025, 0.11];
+        const middle = [0.39, 0.12, 0.53];
+        const high = [1.0, 0.71, 0.39];
+        const mix = (a, b, q) => a.map((value, i) => value * (1 - q) + b[i] * q);
+        rgb = u < 0.62 ? mix(low, middle, u / 0.62) : mix(middle, high, (u - 0.62) / 0.38);
+      } else {
+        const t = Math.max(0, Math.min(1, exponent / 0.85));
+        const u = t * t * (3 - 2 * t);
+        const gold = [1.0, 0.71, 0.39];
+        const teal = [0.16, 0.86, 0.75];
+        const blue = [0.34, 0.40, 0.98];
+        const mix = (a, b, q) => a.map((value, i) => value * (1 - q) + b[i] * q);
+        rgb = u < 0.68 ? mix(gold, teal, u / 0.68) : mix(teal, blue, (u - 0.68) / 0.32);
+      }
+      const contour = 0.91 + 0.09 * (0.5 + 0.5 * Math.cos(exponent * 85));
+      return { rgb: rgb.map((v) => v * contour), gain: 1 };
+    }
+
     if (study.key === 'sierpinski') {
       let qx = px * 0.34 + 0.5;
       let qy = py * 0.34 + 0.5;
@@ -697,12 +759,13 @@
     if (!fallbackContext) return;
     const { width, height } = resizeCanvas();
     if (!width || !height) return;
+    const study = currentStudy();
+    if (!state.dirty && (state.paused || study.animated === false)) return;
     const minInterval = state.paused ? 0 : 110;
     if (!state.dirty && now - state.lastFallback < minInterval) return;
     state.lastFallback = now;
     const image = fallbackContext.createImageData(width, height);
     const data = image.data;
-    const study = currentStudy();
     const aspect = width / height;
     const maxIter = Math.min(state.iterations, 180);
     const shift = state.time;
@@ -723,7 +786,8 @@
   function renderGL(now) {
     if (!gl || !renderer?.program) return;
     const frameInterval = isMobile ? 1000 / 30 : 1000 / 60;
-    if (state.paused && !state.dirty) return;
+    const study = currentStudy();
+    if ((state.paused || study.animated === false) && !state.dirty) return;
     if (!state.dirty && now - state.lastRender < frameInterval) return;
     const { width, height } = resizeCanvas();
     gl.viewport(0, 0, width, height);
@@ -750,7 +814,7 @@
   function frameLoop(now) {
     const delta = Math.min(0.1, Math.max(0, (now - state.lastFrame) / 1000));
     state.lastFrame = now;
-    if (!state.paused) state.time += delta;
+    if (!state.paused && currentStudy().animated !== false) state.time += delta;
     if (fallback) renderFallback(now);
     else renderGL(now);
     requestAnimationFrame(frameLoop);
