@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>rustcube — Rust → WASM → WebGL</title>
+<style>
+  :root { color-scheme: dark; }
+  html,body { margin:0; height:100%; background:#0b0e13; overflow:hidden;
+              font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  #gl { display:block; width:100vw; height:100vh; }
+  #hud { position:fixed; left:14px; bottom:12px; color:#7d8aa0; font-size:12px;
+         letter-spacing:.04em; user-select:none; pointer-events:none; }
+  #hud b { color:#9fd0ff; font-weight:600; }
+  #err { position:fixed; inset:0; display:none; place-items:center;
+         color:#ff9b9b; background:#0b0e13; padding:24px; text-align:center; }
+</style>
+</head>
+<body>
+<canvas id="gl"></canvas>
+<div id="hud"><b>rustcube</b> — geometry &amp; matrices computed in Rust → WebAssembly, rendered with WebGL</div>
+<div id="err"></div>
+<script type="module">
+const errBox = document.getElementById('err');
+function fail(msg){ errBox.style.display='grid'; errBox.textContent = msg; console.error(msg); }
+
+const canvas = document.getElementById('gl');
+const gl = canvas.getContext('webgl2', {antialias:true, alpha:false})
+        || canvas.getContext('webgl',  {antialias:true, alpha:false});
+if (!gl) fail('WebGL is not available in this browser.');
+
+const VS = `
+attribute vec3 a_pos;
+attribute vec3 a_normal;
+uniform mat4 u_model;
+uniform mat4 u_vp;
+varying vec3 v_normal;
+void main() {
+  v_normal = (u_model * vec4(a_normal, 0.0)).xyz;
+  gl_Position = u_vp * (u_model * vec4(a_pos, 1.0));
+}`;
+const FS = `
+precision mediump float;
+varying vec3 v_normal;
+void main() {
+  vec3 n = normalize(v_normal);
+  vec3 L = normalize(vec3(0.45, 0.85, 0.55));
+  float d = max(dot(n, L), 0.0);
+  float rim = pow(1.0 - max(n.z, 0.0), 2.0) * 0.30;
+  vec3 base = vec3(0.16, 0.20, 0.28);
+  vec3 lit  = vec3(0.40, 0.70, 1.00);
+  vec3 col = base + lit * (0.15 + 0.85 * d) + vec3(0.35,0.55,0.95) * rim;
+  gl_FragColor = vec4(col, 1.0);
+}`;
+
+function sh(type, src){
+  const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) fail('shader: '+gl.getShaderInfoLog(s));
+  return s;
+}
+const prog = gl.createProgram();
+gl.attachShader(prog, sh(gl.VERTEX_SHADER, VS));
+gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, FS));
+gl.linkProgram(prog);
+if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) fail('link: '+gl.getProgramInfoLog(prog));
+gl.useProgram(prog);
+const A_POS = gl.getAttribLocation(prog, 'a_pos');
+const A_NRM = gl.getAttribLocation(prog, 'a_normal');
+const U_MODEL = gl.getUniformLocation(prog, 'u_model');
+const U_VP = gl.getUniformLocation(prog, 'u_vp');
+
+const wasmBytes = await (await fetch('rustcube.wasm')).arrayBuffer();
+let wasm;
+try {
+  const { instance } = await WebAssembly.instantiate(wasmBytes, {});
+  wasm = instance.exports;
+} catch (e) { fail('wasm instantiate failed: '+e.message); }
+
+wasm.init();
+const memf32 = () => new Float32Array(wasm.memory.buffer);
+
+// upload geometry from wasm memory
+const vptr = wasm.verts_ptr() >>> 0;
+const nVerts = wasm.vert_count();
+const stride = 6 * 4; // 6 floats per vertex
+const vbuf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, vbuf);
+gl.bufferData(gl.ARRAY_BUFFER, memf32().slice(vptr/4, vptr/4 + nVerts*6), gl.STATIC_DRAW);
+
+const iptr = wasm.indices_ptr() >>> 0;
+const nIdx = wasm.index_count();
+const ibuf = gl.createBuffer();
+gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibuf);
+gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(wasm.memory.buffer, iptr, nIdx), gl.STATIC_DRAW);
+
+gl.enableVertexAttribArray(A_POS);
+gl.vertexAttribPointer(A_POS, 3, gl.FLOAT, false, stride, 0);
+gl.enableVertexAttribArray(A_NRM);
+gl.vertexAttribPointer(A_NRM, 3, gl.FLOAT, false, stride, 12);
+
+gl.enable(gl.DEPTH_TEST);
+gl.clearColor(0.043, 0.055, 0.075, 1.0);
+
+function resize(){
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const w = canvas.clientWidth|0, h = canvas.clientHeight|0;
+  if (canvas.width !== w*dpr || canvas.height !== h*dpr){
+    canvas.width = w*dpr; canvas.height = h*dpr;
+  }
+  gl.viewport(0,0,canvas.width,canvas.height);
+  wasm.set_aspect(canvas.width / Math.max(1, canvas.height));
+}
+window.addEventListener('resize', resize);
+resize();
+
+const t0 = performance.now();
+function frame(now){
+  wasm.update((now - t0) / 1000);
+  resize();
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  gl.uniformMatrix4fv(U_MODEL, false, memf32(), wasm.model_ptr()/4, 16);
+  gl.uniformMatrix4fv(U_VP,    false, memf32(), wasm.vp_ptr()/4, 16);
+  gl.drawElements(gl.TRIANGLES, nIdx, gl.UNSIGNED_SHORT, 0);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
