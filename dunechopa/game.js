@@ -184,8 +184,10 @@ function bindTouch(id, code, aimForward) {
   el.addEventListener('touchcancel', up, {passive:false});
   el.addEventListener('mousedown', dn); el.addEventListener('mouseup', up);
 }
-bindTouch('tGo', 68, false); bindTouch('tBack', 65, false);
-bindTouch('tUp', 87, false); bindTouch('tDown', 83, false);
+// side-view bike scheme: W/S throttle+brake, A/D lean back/nose-down
+bindTouch('tGo', 87, false); bindTouch('tBack', 83, false);   // W gas / S brake-reverse
+bindTouch('tUp', 65, false); bindTouch('tDown', 68, false);   // A lean back / D nose down
+bindTouch('tJump', 32, false);                                  // SPACE
 bindTouch('tNitro', 16, false); bindTouch('tFire', 0, true);
 // start/restart with a plain tap on the canvas for mobile
 canvas.addEventListener('touchstart', (e) => { initAudio(); if (A.ac && A.ac.state==='suspended') A.ac.resume(); }, {passive:true});
