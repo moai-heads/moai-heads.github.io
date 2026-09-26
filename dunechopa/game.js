@@ -135,6 +135,10 @@ function sfx(code, data) {
       break;
     }
     case 5: tone(300, 60, 0.9, 0.22, 'sawtooth'); musicOn(0); break; // game over
+    case 6: // jump whoosh
+      noiseHit(0.16, 400, 1400, 1.0, 0.14, 'bandpass');
+      tone(260, 520, 0.12, 0.10, 'triangle');
+      break;
   }
 }
 
