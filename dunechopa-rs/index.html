@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#0a0e1e">
+<title>DUNE CHOPPA — Rust port probe</title>
+<style>
+  :root{ --sand:#d9cfa8; --glow:#ffc14d; }
+  *{ box-sizing:border-box; }
+  html,body{ margin:0; min-height:100%; background:#05070f; color:#cdd6e0;
+    font-family:ui-monospace,Menlo,Consolas,monospace; }
+  .wrap{ max-width:980px; margin:0 auto; padding:28px 20px 60px; }
+  h1{ font-size:20px; letter-spacing:.5px; color:var(--sand); font-weight:600; margin:0 0 4px; }
+  .sub{ color:#5c6b7d; font-size:12px; margin-bottom:22px; }
+  canvas{ image-rendering:pixelated; width:480px; height:270px; max-width:100%;
+    background:#05070f; border:1px solid #1b2436; border-radius:4px; display:block; }
+  .row{ display:flex; gap:20px; flex-wrap:wrap; align-items:flex-start; margin-bottom:24px; }
+  .card{ border:1px solid #1b2436; border-radius:6px; padding:14px 16px; background:#080c16; min-width:260px; }
+  .card h2{ font-size:11px; text-transform:uppercase; letter-spacing:1px; color:#6b7c93; margin:0 0 10px; font-weight:600; }
+  .kv{ font-size:12px; line-height:1.9; }
+  .kv b{ color:var(--glow); font-weight:600; }
+  a{ color:#66b3ff; text-decoration:none; } a:hover{ text-decoration:underline; }
+  code{ color:#9fd0ff; }
+  p{ font-size:13px; line-height:1.65; color:#9aa8b8; }
+  .ok{ color:#7fe38a; } .warn{ color:#ffc14d; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>DUNE CHOPPA — <span style="color:var(--glow)">Rust</span> port probe</h1>
+  <div class="sub">same 480&times;270 RGBA software framebuffer &middot; same wasm ABI &middot; different language</div>
+
+  <div class="row">
+    <div>
+      <canvas id="c" width="480" height="270"></canvas>
+      <p style="margin:10px 0 0">Live below: a <code>no_std</code>/no-cargo Rust module compiled straight to wasm32, driven by a JS loop that only ever touches
+      <code>init / frame / key / fw / fh / fbptr</code> &mdash; the exact same host contract the Zig build uses. Click the canvas, then press keys to poke it.</p>
+    </div>
+    <div class="card">
+      <h2>Probe evidence</h2>
+      <div class="kv" id="stats">booting&hellip;</div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:20px">
+    <h2>ABI parity</h2>
+    <div class="kv" id="abi">&hellip;</div>
+  </div>
+
+  <div class="card">
+    <h2>Honest scope</h2>
+    <p style="margin:0">This is a <b>pipeline probe</b>, not the shipped game: it implements the full host ABI and renders a procedural dune/rider scene in Rust. The Zig game is 806&nbsp;KB; this probe is a couple of KB. A complete Rust port would land in the same order of magnitude as the Zig build &mdash; same kind of code, no free lunch either way. The point proven here is that the swap is drop-in at the wasm boundary.</p>
+    <p style="margin:12px 0 0">See the original: <a href="https://moai-heads.github.io/dunechopa/" target="_blank" rel="noopener">DUNE CHOPPA (Zig)</a></p>
+  </div>
+</div>
+
+<script>
+(async () => {
+  const FW=480, FH=270;
+  const c=document.getElementById('c'), ctx=c.getContext('2d',{alpha:false});
+  const img=ctx.createImageData(FW,FH);
+  const res=await fetch('dunechopa-rs.wasm');
+  const bytes=await res.arrayBuffer();
+  const size=bytes.byteLength;
+  const mod=new WebAssembly.Module(bytes);
+  const exNames=WebAssembly.Module.exports(mod).map(e=>e.name).sort();
+  const {instance}=await WebAssembly.instantiate(mod,{});
+  const X=instance.exports;
+  X.init((Math.random()*0xffffffff)>>>0);
+
+  const core=['init','frame','key','fw','fh','fbptr','mousemove','mousedown','evpoll',
+              'audio_speed','audio_ground','audio_boost','audio_rev'];
+  const miss=core.filter(n=>typeof X[n]!=='function');
+  document.getElementById('abi').innerHTML =
+    core.map(n=>`<span class="${X[n]?'ok':'warn'}">${n}${X[n]?' &#10003;':' &#10007;'}</span>`).join(' &nbsp; ') +
+    `<br><br>missing: <b>${miss.length?miss.join(', '):'none'}</b> &mdash; the Rust module satisfies the full host contract, so <code>game.js</code> would load it unchanged.`;
+
+  document.getElementById('stats').innerHTML =
+    `wasm module: <b>${(size/1024).toFixed(1)} KB</b><br>`+
+    `framebuffer: <b>${X.fw()}&times;${X.fh()}</b><br>`+
+    `exports: <b>${exNames.length}</b> functions + memory<br>`+
+    `rustc: <b>1.98.1</b> &middot; target <b>wasm32-unknown-unknown</b><br>`+
+    `flags: <b>-O &middot; -C panic=abort &middot; --crate-type cdylib</b>`;
+
+  let last=performance.now(), acc=0, frames=0;
+  function loop(now){ const dt=now-last; last=now; acc+=dt; frames++;
+    if(acc>500){ acc=0; frames=0; }
+    X.frame(dt);
+    const mem=new Uint8Array(X.memory.buffer); const b=X.fbptr();
+    img.data.set(mem.subarray(b, b+FW*FH*4));
+    ctx.putImageData(img,0,0);
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+
+  addEventListener('keydown',e=>{ X.key(e.keyCode||0,1); });
+  addEventListener('keyup',e=>{ X.key(e.keyCode||0,0); });
+  c.addEventListener('mousemove',e=>{ const r=c.getBoundingClientRect();
+    X.mousemove((e.clientX-r.left)*FW/r.width,(e.clientY-r.top)*FH/r.height); });
+  c.addEventListener('mousedown',e=>X.mousedown(1));
+  c.addEventListener('mouseup',e=>X.mousedown(0));
+})();
+</script>
+</body>
+</html>

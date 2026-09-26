@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b0d0f">
+  <meta name="description" content="A computational experiment: image-driven Julia orbits and Fourier phase-only texture feedback.">
+  <title>Pepe in the orbit — image-driven fractals</title>
+  <style>
+    :root{color-scheme:dark;--bg:#0b0d0f;--panel:#121719;--ink:#f1eee8;--muted:#a4aaa4;--line:#2a3230;--lime:#c4e66c;--warm:#eea276}
+    *{box-sizing:border-box}body{margin:0;background:radial-gradient(850px 550px at 90% -12%,#34412944,transparent 68%),var(--bg);color:var(--ink);font:16px/1.65 system-ui,-apple-system,Segoe UI,sans-serif}
+    main{width:min(1100px,calc(100% - 32px));margin:0 auto;padding:26px 0 70px}.top{display:flex;justify-content:space-between;gap:18px;border-bottom:1px solid var(--line);padding:8px 0 20px;color:var(--muted);font-size:13px}.top a,.back{color:var(--lime);text-decoration:none}.eyebrow{text-transform:uppercase;letter-spacing:.16em;font:12px/1.5 ui-monospace,monospace;color:var(--lime);margin:0 0 12px}h1{font-size:clamp(42px,8vw,86px);letter-spacing:-.065em;line-height:.98;margin:24px 0 18px}h1 i{color:var(--lime);font-weight:500}.lede{max-width:760px;color:#c3c9c2;font-size:19px}.callout{border:1px solid #c4e66c55;background:#c4e66c0c;border-radius:14px;padding:16px 19px;margin:25px 0;color:#d7ddcf}.callout b{color:var(--lime)}h2{font-size:27px;letter-spacing:-.035em;margin:40px 0 10px}p{margin:10px 0;color:#c1c7c0}.hero{display:block;width:100%;height:auto;border:1px solid var(--line);border-radius:12px;background:#0d1112}.duo{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:18px}.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px}.card img{width:100%;display:block;border-radius:8px;background:#0d1112}.card h3{font-size:18px;margin:12px 0 2px}.card p{font-size:14px;color:var(--muted)}code{font: .9em ui-monospace,monospace;color:#d6f09a;background:#1b2418;padding:.15em .35em;border-radius:4px}.equation{padding:14px 17px;border-left:2px solid var(--lime);background:#111719;overflow:auto;font:15px/1.9 ui-monospace,monospace;color:#e6eddf}.method-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}.method{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px}.method strong{color:var(--lime)}footer{border-top:1px solid var(--line);margin-top:44px;padding-top:20px;color:var(--muted);font-size:14px;display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}@media(max-width:680px){.duo,.method-grid{grid-template-columns:1fr}.top{align-items:flex-start;flex-direction:column}.lede{font-size:17px}}
+  </style>
+</head>
+<body>
+<main>
+  <nav class="top"><a href="../">← Fractal Field</a><span>side experiment / image-driven dynamics</span></nav>
+  <header>
+    <p class="eyebrow">fourier phase · nonlinear feedback · julia maps</p>
+    <h1>Pepe in<br>the <i>orbit</i></h1>
+    <p class="lede">Can an image become part of a fractal's rule—not just a texture laid on top? I compared fixed-per-pixel forcing, orbit-sampled grayscale, Fourier phase-only feedback, and a simple final-orbit image lookup.</p>
+  </header>
+  <div class="callout"><b>Source note:</b> this first pass uses an original, hand-drawn frog-face stand-in because no specific Pepe image was attached. It's a reproducible test input, not an imported Pepe image. Swap the source with your chosen image to reproduce its exact features.</div>
+  <img class="hero" src="comparison.png" alt="Five image-driven Julia methods compared side by side">
+
+  <h2>First: does Fourier phase still look like the source?</h2>
+  <p>For a grayscale image, the Fourier transform stores phase by <em>frequency</em>, not by image pixel. The useful comparison is a phase-only reconstruction: keep each Fourier coefficient's angle, replace its magnitude by one, then inverse-transform. It retains some spatial structure, but much of the source's tonal information is lost.</p>
+  <div class="duo">
+    <article class="card"><img src="source-frog.png" alt="Original custom grayscale frog-face test image"><h3>Input image</h3><p>Original hand-drawn test image, converted to grayscale for the recurrence.</p></article>
+    <article class="card"><img src="phase-only-reconstruction.png" alt="Reconstruction using only the Fourier phase of the test image"><h3>Phase-only reconstruction</h3><p>Magnitude flattened; phase retained. Pearson correlation with the input after normalization: about 0.22.</p></article>
+  </div>
+
+  <h2>The orbit experiments</h2>
+  <div class="method-grid">
+    <article class="method"><strong>01 · Julia reference</strong><p><code>zₙ₊₁ = zₙ² + c</code>. Baseline: image does not affect dynamics.</p><img class="hero" src="julia.png" alt="Reference Julia set"></article>
+    <article class="method"><strong>02 · fixed image field</strong><p><code>zₙ₊₁ = zₙ² + c + α(2g(T(z₀))−1)</code>. Each starting pixel gets a fixed image-derived shift.</p><img class="hero" src="fixed-luma.png" alt="Julia set with fixed per-pixel image forcing"></article>
+    <article class="method"><strong>03 · orbit-sampled grayscale</strong><p><code>zₙ₊₁ = zₙ² + c + α(2g(T(zₙ))−1)</code>. The image is sampled afresh at every orbit step.</p><img class="hero" src="orbit-luma.png" alt="Julia-like set with grayscale sampled along each orbit"></article>
+    <article class="method"><strong>04 · orbit-sampled phase-only</strong><p>Same feedback, but the texture is the phase-only reconstruction instead of the original grayscale.</p><img class="hero" src="orbit-phase.png" alt="Julia-like set with phase-only image sampled along each orbit"></article>
+    <article class="method"><strong>05 · final orbit → image</strong><p>Ordinary Julia dynamics; after escape, the last orbit coordinate selects image luminance for coloring. Clear separation of geometry and source-texture mapping.</p><img class="hero" src="terminal-image.png" alt="Julia escape-time image colored by image values at final orbit points"></article>
+  </div>
+
+  <h2>What seems promising</h2>
+  <p>For legibility, keep a direct image-to-output mapping (fixed field or final-orbit lookup). For novel fractal structure, orbit feedback is the fun part—but every orbit folds the image through nonlinear coordinates, so the source is less directly readable. Phase-only feedback is an interesting alternate field, not a secret phase image that reconstructs Pepe by itself.</p>
+  <p>Full notes, exact equations, parameters, and the reproducible NumPy/Pillow renderer are in <a class="back" href="README.md">the experiment write-up</a>. <a class="back" href="experiment.py">Source script</a>.</p>
+  <footer><span>Fractal Field / image-driven orbit lab</span><a class="back" href="../">back to the gallery ↗</a></footer>
+</main>
+</body>
+</html>
