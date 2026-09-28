@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>friendslop — a Cube clone you can't solo</title>
+<meta name="description" content="A from-scratch software-rendered first-person Cube clone with an AI co-op crew. Runs in your browser via WebAssembly.">
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%230a0b0d'/><path d='M6 6h20v20H6z' fill='none' stroke='%23ffb020' stroke-width='2'/></svg>">
+</head>
+<body>
+
+<nav><div class="wrap">
+  <span class="brand">FRIENDS<b>SLOP</b></span>
+  <span class="links">
+    <a href="#play">Play</a>
+    <a href="#about">About</a>
+    <a href="#classes">Classes</a>
+    <a href="#gallery">Gallery</a>
+    <a href="#build">Build</a>
+    <a href="https://github.com/moai-heads/friendslop">GitHub ↗</a>
+  </span>
+</div></nav>
+<div class="hazard"></div>
+
+<header class="hero"><div class="wrap">
+  <div class="kicker">// a Cube clone you cannot solo</div>
+  <h1>FRIEND<span>SLOP</span></h1>
+  <p class="tag">A from-scratch, software-rendered first-person <b>Cube</b> clone. A crew of AI
+  specialists shares one shift-locker of moving rooms, reads the numbers, defuses what they can,
+  forces what they can't — and reaches the exit <b>together</b>. No engine. No GL. No assets.
+  One C++17 binary, hand-rolled rasterizer.</p>
+  <div class="btns">
+    <a class="btn primary" href="#play">▶ Play in browser</a>
+    <a class="btn" href="https://github.com/moai-heads/friendslop">Source on GitHub</a>
+  </div>
+</div></header>
+
+<!-- ======================= PLAY ======================= -->
+<section id="play"><div class="wrap">
+  <div class="sec-kicker">// live simulation</div>
+  <h2>The Cube, running in your browser</h2>
+  <p class="muted">The same C++ simulation, compiled to WebAssembly. It plays itself — an AI crew runs a
+  full shift: navigating, reading room codes, disarming traps, reviving the fallen, and trying to outlast
+  the lattice when it slides. Watch, or take the controls.</p>
+
+  <div class="play">
+    <div>
+      <div class="stage">
+        <canvas id="cube" width="640" height="360"></canvas>
+        <div class="scan"></div>
+      </div>
+      <div class="stagebar">
+        <span class="badge live" id="status">BOOT</span>
+        <span class="spacer"></span>
+        <label class="field">seed&nbsp;<input type="number" id="seed" value="8" min="1" step="1"></label>
+        <label class="field">crew&nbsp;<input type="range" id="crew" min="3" max="8" value="5"><b id="crewVal">5</b></label>
+        <button class="btn ctl" id="restart">⟳ Restart</button>
+      </div>
+      <div class="stagebar" style="border-top:0">
+        <label class="field"><input type="checkbox" id="noshift">&nbsp;freeze the Cube</label>
+        <span class="spacer"></span>
+        <span class="field">cam</span>
+        <button class="btn ctl primary" data-follow="0">1</button>
+        <button class="btn ctl" data-follow="1">2</button>
+        <button class="btn ctl" data-follow="2">3</button>
+        <button class="btn ctl" data-follow="3">4</button>
+        <span class="spacer"></span>
+        <button class="btn ctl" data-speed="1">1×</button>
+        <button class="btn ctl" data-speed="2">2×</button>
+        <button class="btn ctl" data-speed="4">4×</button>
+        <button class="btn ctl" id="pause">◼ Pause</button>
+      </div>
+    </div>
+
+    <aside class="side">
+      <div class="card">
+        <h4>Shift status</h4>
+        <div class="stats">
+          <div class="stat"><div class="v" id="statTime">0s</div><div class="k">Time</div></div>
+          <div class="stat"><div class="v" id="statShift">0</div><div class="k">Shifts</div></div>
+          <div class="stat"><div class="v" id="statAlive">5</div><div class="k">Alive</div></div>
+          <div class="stat"><div class="v" id="statDeaths">0</div><div class="k">Deaths</div></div>
+          <div class="stat"><div class="v" id="statRevives">0</div><div class="k">Revives</div></div>
+          <div class="stat"><div class="v" id="statCrew">5</div><div class="k">Crew</div></div>
+        </div>
+      </div>
+      <div class="card">
+        <h4>Crew</h4>
+        <div class="crew" id="crew"></div>
+      </div>
+      <div class="card">
+        <h4>Log</h4>
+        <div class="feed" id="feed"></div>
+      </div>
+    </aside>
+  </div>
+  <p class="small muted" style="margin-top:12px">Tip: bump the speed to <b>4×</b> to watch a full run in seconds — the
+  first reconfiguration lands around the 30-second mark.</p>
+</div></section>
+
+<!-- ======================= ABOUT ======================= -->
+<section id="about"><div class="wrap">
+  <div class="sec-kicker">// the rules of the Cube</div>
+  <h2>Prime rooms kill. You can't read them alone.</h2>
+  <div class="grid2">
+    <div>
+      <p>Every room carries a three-digit code, and a prime code means <b>trapped</b>. But the numbers
+      aren't printed in your room — someone has to <em>read</em> them, and the only people who can are the
+      specialists. Nobody in this Cube is self-sufficient.</p>
+      <ul class="feat">
+        <li><b>The Cube moves.</b> Every ~30&nbsp;s the whole lattice slides one slot over. A room that read
+        <code>7</code> (prime → deadly) a moment ago may now hold <code>8</code> (composite → safe) — and every
+        number the crew memorised is worthless. The map is wiped; they re-read and re-route from scratch.</li>
+        <li><b>Traps are real.</b> Spikes, saws, fire, acid, lasers, crushers and tesla coils — each rendered,
+        animated and lethal. Death leaves a ragdoll; a teammate's revive puts you back on your feet.</li>
+        <li><b>The exit must be found, not stumbled into.</b> Only the Architect can sense which room it is — and
+        only the Engineer can defuse the room it's sitting next to.</li>
+      </ul>
+    </div>
+    <div>
+      <figure>
+        <img src="img/cube_shift.gif" alt="The Cube reconfiguring: rooms slide, the map goes stale, the crew re-reads.">
+        <figcaption>A live reconfiguration — four seconds of normal operation, then the lattice slides and the
+        crew starts over. <span class="muted">(captured straight from the simulator)</span></figcaption>
+      </figure>
+    </div>
+  </div>
+</div></section>
+
+<!-- ======================= CLASSES ======================= -->
+<section id="classes"><div class="wrap">
+  <div class="sec-kicker">// six specialists, zero redundancy</div>
+  <h2>Classes — skills only they have</h2>
+  <p class="muted">Skills are hard-gated: each specialist is the <em>only</em> way to do their thing. A bad
+  crew composition is survivable but brutal, and the loading log tells you exactly what you're missing.</p>
+  <table>
+    <thead><tr><th>Class</th><th>Colour</th><th>The only thing they can do</th></tr></thead>
+    <tbody>
+      <tr><td class="k" style="color:#ffb020">ENG</td><td>amber</td><td><b>Defuse</b> a primed room's trap mechanism.</td></tr>
+      <tr><td class="k" style="color:#66d0ff">MATH</td><td>blue</td><td><b>Read</b> a room's code and call it clean or primed.</td></tr>
+      <tr><td class="k" style="color:#8effc0">ARCH</td><td>green</td><td><b>Sense</b> which room is the exit.</td></tr>
+      <tr><td class="k" style="color:#ff5c6a">COP</td><td>red</td><td><b>Force</b> welded-shut doors.</td></tr>
+      <tr><td class="k" style="color:#66ffcc">SCT</td><td>cyan</td><td>Fastest legs — first through the hatch.</td></tr>
+      <tr><td class="k" style="color:#c58bff">SAV</td><td>violet</td><td>Fast reads, but <b>20% wrong</b>.</td></tr>
+    </tbody>
+  </table>
+  <p class="small muted" style="margin-top:12px">Difficulty, measured across 30 seeded runs: solo <b>16/30</b> ·
+  2 crew <b>20/30</b> · 3 crew <b>27/30</b> · 4–5 crew <b>30/30</b>. Working together literally keeps you alive.</p>
+</div></section>
+
+<!-- ======================= GALLERY ======================= -->
+<section id="gallery"><div class="wrap">
+  <div class="sec-kicker">// rendered straight from the simulator</div>
+  <h2>Gallery</h2>
+  <div class="gal">
+    <figure><img src="img/friendslop.gif" alt="AI crew hauling scrap and dying in traps"><figcaption>
+      A shift in progress — goal picking, loot, chatter, and an over-the-shoulder camera.</figcaption></figure>
+    <figure><img src="img/hero_sheet.png" alt="Contact sheet of crew and scene shots"><figcaption>
+      Contact sheet of crew and scene shots.</figcaption></figure>
+    <figure><img src="img/cube_shift_sheet.png" alt="Contact sheet of the Cube reconfiguration"><figcaption>
+      Contact sheet of a reconfiguration: normal ops, the slide, the panic.</figcaption></figure>
+    <figure><img src="img/cube_shift.gif" alt="GIF of the Cube sliding"><figcaption>
+      The lattice sliding while the crew's world goes stale.</figcaption></figure>
+  </div>
+</div></section>
+
+<!-- ======================= BUILD ======================= -->
+<section id="build"><div class="wrap">
+  <div class="sec-kicker">// no dependencies</div>
+  <h2>Build &amp; run</h2>
+  <div class="grid2">
+    <div>
+      <p>Just a C++17 compiler. No SDL, no OpenGL, no engine, no assets — the rasterizer, textures and
+      bitmap font are all in-repo.</p>
+      <pre><code>git clone https://github.com/moai-heads/friendslop
+cd friendslop
+make            # -> ./cube
+
+# first-person explorer
+./cube --seed 3
+
+# the friendslop co-op mode
+./cube --coop --seed 8 --crew 5 --shot 26</code></pre>
+      <p class="small muted">Renders one frame to PPM by default; <code>--seq</code> emits an animation sequence.
+      <code>CUBE_NOSHIFT=1</code> freezes the Cube; <code>CUBE_DEBUG=1</code> dumps telemetry.</p>
+    </div>
+    <div>
+      <h3>Under the hood</h3>
+      <ul class="feat">
+        <li><code>src/raster.*</code> — z-buffered, textured, lit triangle rasterizer with alpha-tested surfaces.</li>
+        <li><code>src/tex.*</code> — procedural textures: concrete, hazard stripe, grid floor, brushed metal…</li>
+        <li><code>src/world.*</code> — the room lattice, collision, doors, seven trap types, and the room-sliding reconfiguration.</li>
+        <li><code>src/players.*</code> — the crew: BFS nav, goal picking, quota loop, chatter, ragdolls, revive rescue-bias, HUD.</li>
+        <li><code>web/web.cpp</code> — a thin Emscripten shim exposing the sim to the browser.</li>
+      </ul>
+      <p class="small muted">~2,700 lines of hand-written C++. The WASM build you're looking at is the same
+      code path as the native binary.</p>
+    </div>
+  </div>
+</div></section>
+
+<footer><div class="wrap">
+  <div class="hazard" style="margin-bottom:22px"></div>
+  <p>friendslop — a <b>Cube</b> clone built from scratch. Rendered with a hand-rolled software rasterizer,
+  compiled to WebAssembly for the browser.</p>
+  <p class="muted">Inspired by Vincenzo Natali's <em>Cube</em> (1997). Not affiliated. ·
+  <a href="https://github.com/moai-heads/friendslop">github.com/moai-heads/friendslop</a></p>
+</div></footer>
+
+<script src="wasm/demo.js"></script>
+<script src="demo.js"></script>
+</body>
+</html>
