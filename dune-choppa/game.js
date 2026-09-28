@@ -52,23 +52,46 @@
   // ---- state ----
   const state = {
     over: false, win: false, score: 0, wave: 1, t: 0,
+    warCrimes: 0, wcFlash: 0,
     spawnCd: 1.2, waveTimer: 0, shake: 0, best: +(localStorage.getItem('dc_best') || 0)
   };
 
   const P = {};
   function reset() {
     state.over = false; state.score = 0; state.wave = 1; state.t = 0;
+    state.warCrimes = 0; state.wcFlash = 0;
     state.spawnCd = 1.2; state.waveTimer = 0; state.shake = 0;
     P.x = 260; P.y = 250; P.vx = 0; P.vy = 0;
     P.hp = 100; P.heat = 0; P.fireCd = 0; P.rotor = 0; P.hitFlash = 0;
     P.bombs = 5; P.bombCd = 0; P.bombRegen = 0;
     enemies.length = 0; bullets.length = 0; ebullets.length = 0; parts.length = 0;
     bombs.length = 0; booms.length = 0; wantBomb = false;
+    structs.length = 0; genX = 900;
+    missiles.length = 0; floaters.length = 0;
     for (let i = 0; i < 5; i++) spawnEnemy(360 + i * 260);
   }
   const enemies = [], bullets = [], ebullets = [], parts = [];
   const bombs = [], booms = [];
+  const structs = [];               // towns + military bases along the ground
+  const missiles = [];              // SAMs launched by schools & hospitals
+  const floaters = [];              // floating world-space text
+  let genX = 900;                   // how far the world has been populated
   let wantBomb = false;
+
+  // deterministic per-x RNG so clusters are stable if we ever revisit them
+  function hash32(n) {
+    n = (n ^ 61) ^ (n >>> 16); n = (n + (n << 3)) ^ (n >>> 4);
+    n = Math.imul(n, 0x27d4eb2d); n = (n + (n << 15)) ^ (n >>> 9);
+    return n >>> 0;
+  }
+  function mulberry(a) {
+    return function () {
+      a |= 0; a = (a + 0x6D2B79F5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
   const EN = ['raider', 'raider', 'raider', 'thrower', 'thrower', 'gunner'];
 
   function spawnEnemy(x0) {
@@ -103,6 +126,7 @@
   // ---- update ----
   function update(dt) {
     state.t += dt;
+    ensureStructs();
     if (state.shake > 0) state.shake = Math.max(0, state.shake - dt * 3);
 
     if (!state.over) {
@@ -188,6 +212,21 @@
     // despawn far behind
     for (let i = enemies.length - 1; i >= 0; i--) if (enemies[i].x < state.camX - 200 || !enemies[i].alive) enemies.splice(i, 1);
 
+    // schools & hospitals lob surface-to-air missiles at the chopper
+    for (const st of structs) {
+      if (st.fireFlash > 0) st.fireFlash -= dt;
+      if (!st.alive || (st.kind !== 'school' && st.kind !== 'hospital')) continue;
+      if (st.fireCd > 0) { st.fireCd -= dt; continue; }
+      const dx = P.x - st.x;
+      if (Math.abs(dx) > 540) continue;                       // only when the chopper is close
+      const roofY = st.gy - structH(st.kind);
+      if (P.y > roofY - 6) continue;                          // needs the chopper above the roofline
+      launchMissile(st);
+      st.fireCd = 2.4 + Math.random() * 2.4;
+    }
+
+    // player bullets
+
     // player bullets
     for (const b of bullets) {
       b.x += b.vx * dt; b.y += b.vy * dt; b.life -= dt;
@@ -210,8 +249,15 @@
         if (!e.alive) continue;
         if (Math.abs(b.x - e.x) < 22 && b.y > e.y - 54 && b.y < e.y + 4) { hit = true; break; }
       }
+      if (!hit) {
+        for (const st of structs) {
+          if (!st.alive) continue;
+          const h = structH(st.kind), w = structW(st.kind);
+          if (Math.abs(b.x - st.x) < w / 2 && b.y > st.gy - h && b.y < st.gy) { hit = true; break; }
+        }
+      }
       const gy = groundY(b.x) - 2;
-      if (hit || b.y >= gy) { b.life = 0; explode(b.x, Math.min(b.y, gy)); }
+      if (hit || b.y >= gy) { b.life = 0; explode(b.x, Math.min(b.y, gy), true); }
     }
     for (let i = bombs.length - 1; i >= 0; i--)
       if (bombs[i].life <= 0 || bombs[i].x < state.camX - 80) bombs.splice(i, 1);
@@ -231,17 +277,68 @@
     }
     for (let i = ebullets.length - 1; i >= 0; i--) if (ebullets[i].life <= 0) ebullets.splice(i, 1);
 
+    // SAM missiles: homing flight, smoke trail, impact
+    for (const m of missiles) {
+      const dx = P.x - m.x, dy = P.y - m.y;
+      const cur = Math.atan2(m.vy, m.vx);
+      let des = Math.atan2(dy, dx);
+      let diff = des - cur;
+      while (diff > Math.PI) diff -= 6.283185;
+      while (diff < -Math.PI) diff += 6.283185;
+      const turn = Math.min(Math.abs(diff), 2.3 * dt) * Math.sign(diff);
+      const na = cur + turn, sp = Math.hypot(m.vx, m.vy);
+      m.vx = Math.cos(na) * sp; m.vy = Math.sin(na) * sp;
+      m.x += m.vx * dt; m.y += m.vy * dt; m.life -= dt;
+      m.smoke -= dt;
+      if (m.smoke <= 0) {
+        m.smoke = 0.035;
+        parts.push({ x: m.x, y: m.y, vx: (Math.random() - 0.5) * 24, vy: (Math.random() - 0.5) * 24 - 8,
+                     life: 0.45, col: '#98a4b4' });
+      }
+      if (!state.over && Math.abs(m.x - P.x) < 30 && Math.abs(m.y - P.y) < 22) {
+        m.life = 0; explode(m.x, m.y, false, true);
+        P.hp -= 14; P.hitFlash = 0.4; state.shake = 1;
+        burst(P.x, P.y, 12, '#ff8a5c', 220);
+        if (P.hp <= 0) { P.hp = 0; state.over = true; state.win = false; saveBest(); burst(P.x, P.y, 40, '#ff5a3c', 320); }
+        continue;
+      }
+      if (m.y > groundY(m.x) - 2) { m.life = 0; explode(m.x, groundY(m.x) - 2, false, true); }
+      if (m.x < state.camX - 200) m.life = 0;
+    }
+    for (let i = missiles.length - 1; i >= 0; i--) if (missiles[i].life <= 0) missiles.splice(i, 1);
+
+    // floating text
+    for (const f of floaters) { f.life -= dt; f.y -= 22 * dt; }
+    for (let i = floaters.length - 1; i >= 0; i--) if (floaters[i].life <= 0) floaters.splice(i, 1);
+    if (state.wcFlash > 0) state.wcFlash = Math.max(0, state.wcFlash - dt * 2.2);
+
     // particles
     for (const p of parts) { p.vy += 420 * dt; p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt; }
     for (let i = parts.length - 1; i >= 0; i--) if (parts[i].life <= 0) parts.splice(i, 1);
   }
 
-  function explode(x, y) {
+  function explode(x, y, byPlayer, noStructs) {
     booms.push({ x, y, life: 0.5, max: 0.5 });
     state.shake = Math.max(state.shake, 1.1);
     burst(x, y, 26, '#ffd06b', 320);
     burst(x, y, 14, '#ff6b3c', 220);
     const R = 96;
+    if (!noStructs) for (const st of structs) {
+      if (!st.alive) continue;
+      const h = structH(st.kind), cx2 = st.x, cy2 = st.gy - h / 2;
+      const dx = cx2 - x, dy = cy2 - y;
+      if (dx * dx + dy * dy < R * R) {
+        st.alive = false;
+        burst(st.x, st.gy - 12, 14, '#c9a06a', 200);
+        if (!st.civ) state.score += 25;   // military targets score; civilian buildings do not
+        if (byPlayer && (st.kind === 'school' || st.kind === 'hospital')) {
+          state.warCrimes++; state.wcFlash = 1.4;                // bombing a school/hospital = war crime
+          floaters.push({ x: st.x, y: st.gy - structH(st.kind) - 8,
+                          text: 'WAR CRIME', life: 1.8, col: '#ff6b5a' });
+          burst(st.x, st.gy - structH(st.kind) / 2, 22, '#ffffff', 260);
+        }
+      }
+    }
     for (const e of enemies) {
       if (!e.alive) continue;
       const dx = e.x - x, dy = (e.y - 26) - y;
@@ -250,6 +347,170 @@
         burst(e.x, e.y - 26, 16, '#ff6b6b', 240);
       }
     }
+  }
+
+
+  // ---- towns & military bases ----
+  function launchMissile(st) {
+    const sx = st.x, sy = st.gy - structH(st.kind) - 2;
+    const ang = Math.atan2(P.y - sy, P.x - sx);
+    missiles.push({ x: sx, y: sy, vx: Math.cos(ang) * 225, vy: Math.sin(ang) * 225 - 70,
+                    life: 6, smoke: 0 });
+    st.fireFlash = 0.18;
+    burst(sx, sy, 5, '#ffd27a', 110);
+  }
+  function structH(kind) {
+    return ({ house: 30, school: 48, hospital: 36, tent: 20, bunker: 20,
+              radar: 36, tower: 52, flag: 44, pad: 6 })[kind] || 26;
+  }
+  function structW(kind) {
+    return ({ house: 34, school: 58, hospital: 52, tent: 28, bunker: 52,
+              radar: 24, tower: 22, flag: 20, pad: 40 })[kind] || 30;
+  }
+  function addStruct(x, kind) {
+    structs.push({ x, gy: groundY(x), kind, alive: true,
+                   civ: kind === 'house' || kind === 'school' || kind === 'hospital',
+                   hitT: 0, seed: Math.random() * 1000,
+                   fireCd: 0.8 + Math.random() * 2.6, fireFlash: 0 });
+  }
+  function buildTown(cx, rnd) {
+    const n = 4 + ((rnd() * 3) | 0);
+    const kinds = [];
+    for (let i = 0; i < n; i++) kinds.push('house');
+    kinds[(rnd() * n) | 0] = 'school';
+    let h = (rnd() * n) | 0;
+    if (kinds[h] === 'school') h = (h + 1) % n;
+    kinds[h] = 'hospital';
+    const step = 66 + rnd() * 26;
+    for (let i = 0; i < n; i++) {
+      const x = cx + (i - (n - 1) / 2) * step + (rnd() - 0.5) * 14;
+      addStruct(x, kinds[i]);
+    }
+  }
+  function buildBase(cx, rnd) {
+    const n = 2 + ((rnd() * 3) | 0);
+    for (let i = 0; i < n; i++) addStruct(cx + i * 50 + (rnd() - 0.5) * 18, 'tent');
+    addStruct(cx - 30 + (rnd() - 0.5) * 20, 'bunker');
+    addStruct(cx + n * 50 + 34, 'radar');
+    addStruct(cx + 24, 'tower');
+    addStruct(cx + n * 50 + 84, 'flag');
+    addStruct(cx + 96, 'pad');
+  }
+  function ensureStructs() {
+    while (genX < state.camX + VW + 500) {
+      const rnd = mulberry(hash32(genX | 0));
+      if (rnd() < 0.42) buildBase(genX, rnd); else buildTown(genX, rnd);
+      genX += 1000 + rnd() * 900;
+    }
+    for (let i = structs.length - 1; i >= 0; i--)
+      if (structs[i].x < state.camX - 700) structs.splice(i, 1);
+  }
+
+  function drawStructs() {
+    for (const st of structs) {
+      const sx = st.x - state.camX;
+      if (sx < -140 || sx > VW + 140) continue;
+      ctx.save(); ctx.translate(sx, st.gy);
+      if (!st.alive) { drawRubble(st); ctx.restore(); continue; }
+      switch (st.kind) {
+        case 'house':    drawHouse(); break;
+        case 'school':   drawSchool(st); break;
+        case 'hospital': drawHospital(); break;
+        case 'tent':     drawTent(); break;
+        case 'bunker':   drawBunker(); break;
+        case 'radar':    drawRadar(); break;
+        case 'tower':    drawTower(); break;
+        case 'flag':     drawFlag(); break;
+        case 'pad':      drawPad(); break;
+      }
+      if ((st.kind === 'school' || st.kind === 'hospital') && st.alive) {
+        const armed = st.fireCd < 1.3;
+        const on = armed ? (Math.sin(state.t * 20) > 0) : (Math.sin(state.t * 4) > 0);
+        const ly = st.kind === 'school' ? -72 : -46;
+        ctx.fillStyle = on ? '#ff4d4d' : 'rgba(255,80,80,0.22)';
+        ctx.beginPath(); ctx.arc(0, ly, 2.6, 0, 6.283); ctx.fill();
+      }
+      ctx.restore();
+    }
+  }
+  function windowsRow(y, n, litSeed) {
+    ctx.fillStyle = '#ffdd9a';
+    for (let i = 0; i < n; i++) {
+      if (((litSeed >> i) & 1) === 0) continue;
+      ctx.fillRect(-((n - 1) * 6) / 2 + i * 6 - 2, y, 4, 4);
+    }
+  }
+  function drawHouse() {
+    ctx.fillStyle = '#c9a06a'; ctx.fillRect(-17, -26, 34, 26);
+    ctx.fillStyle = '#8c5a3a';
+    ctx.beginPath(); ctx.moveTo(-21, -26); ctx.lineTo(0, -40); ctx.lineTo(21, -26); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#5a3b27'; ctx.fillRect(-4, -14, 8, 14);
+    windowsRow(-21, 4, (Math.random() * 16) | 0);
+  }
+  function drawSchool(st) {
+    ctx.fillStyle = '#d8b480'; ctx.fillRect(-29, -28, 58, 28);
+    ctx.fillStyle = '#7a5233';
+    ctx.beginPath(); ctx.moveTo(-32, -28); ctx.lineTo(0, -46); ctx.lineTo(32, -28); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#b08650'; ctx.fillRect(-6, -60, 12, 20);
+    ctx.fillStyle = '#7a5233';
+    ctx.beginPath(); ctx.moveTo(-9, -60); ctx.lineTo(0, -70); ctx.lineTo(9, -60); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#ffd166'; ctx.beginPath(); ctx.arc(0, -57, 4, 0, 6.283); ctx.fill();
+    windowsRow(-22, 4, (st.seed * 1000 | 0));
+    ctx.fillStyle = '#2b3442'; ctx.fillRect(-16, -10, 32, 9);
+    ctx.fillStyle = '#ffe6a8'; ctx.font = '600 7px ui-monospace,monospace';
+    ctx.textAlign = 'center'; ctx.fillText('SCHOOL', 0, -3); ctx.textAlign = 'left';
+  }
+  function drawHospital() {
+    ctx.fillStyle = '#efe4d0'; ctx.fillRect(-26, -34, 52, 34);
+    ctx.fillStyle = '#c9d8e0'; ctx.fillRect(-28, -40, 56, 7);
+    ctx.fillStyle = '#e23b3b';
+    ctx.fillRect(-4, -31, 8, 22); ctx.fillRect(-13, -22, 26, 8);
+    for (let i = 0; i < 3; i++) { ctx.fillStyle = '#9fb0bc'; ctx.fillRect(-22 + i * 18, -8, 6, 6); }
+  }
+  function drawTent() {
+    ctx.fillStyle = '#7a8a52';
+    ctx.beginPath(); ctx.moveTo(-14, 0); ctx.lineTo(0, -20); ctx.lineTo(14, 0); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#5c6a3c';
+    ctx.beginPath(); ctx.moveTo(-14, 0); ctx.lineTo(0, -20); ctx.lineTo(0, 0); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#3f4a2a'; ctx.fillRect(-2, -9, 4, 9);
+  }
+  function drawBunker() {
+    ctx.fillStyle = '#8d8d84';
+    ctx.beginPath(); ctx.ellipse(0, 0, 26, 18, 0, Math.PI, 0); ctx.fill();
+    ctx.fillStyle = '#6f6f68'; ctx.fillRect(-26, -3, 52, 3);
+    ctx.fillStyle = '#2b2e2e'; ctx.fillRect(-15, -11, 30, 4);
+  }
+  function drawRadar() {
+    ctx.strokeStyle = '#9aa3ac'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, -30); ctx.stroke();
+    ctx.beginPath(); ctx.ellipse(0, -30, 13, 6, -0.5, 0, 6.283); ctx.stroke();
+    ctx.fillStyle = '#6fd0ff'; ctx.beginPath(); ctx.arc(2, -32, 1.6, 0, 6.283); ctx.fill();
+  }
+  function drawTower() {
+    ctx.fillStyle = '#7a6a58';
+    ctx.beginPath(); ctx.moveTo(-11, 0); ctx.lineTo(-5, -46); ctx.lineTo(5, -46); ctx.lineTo(11, 0); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#5b4f40'; ctx.fillRect(-10, -52, 20, 8);
+    ctx.fillStyle = '#2b2e2e'; ctx.fillRect(-7, -50, 14, 3);
+  }
+  function drawFlag() {
+    ctx.strokeStyle = '#9a9a9a'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, -44); ctx.stroke();
+    ctx.fillStyle = '#6fa83c';
+    ctx.beginPath(); ctx.moveTo(0, -44);
+    ctx.lineTo(20 + Math.sin(state.t * 3) * 3, -38); ctx.lineTo(0, -32); ctx.closePath(); ctx.fill();
+  }
+  function drawPad() {
+    ctx.strokeStyle = '#c9bfd0'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.ellipse(0, -3, 18, 6, 0, 0, 6.283); ctx.stroke();
+    ctx.fillStyle = '#c9bfd0'; ctx.font = 'bold 10px ui-monospace,monospace';
+    ctx.textAlign = 'center'; ctx.fillText('H', 0, 0); ctx.textAlign = 'left';
+  }
+  function drawRubble(st) {
+    ctx.fillStyle = '#5b4a3a';
+    ctx.beginPath(); ctx.moveTo(-18, 0); ctx.lineTo(-7, -10); ctx.lineTo(3, -5);
+    ctx.lineTo(12, -12); ctx.lineTo(20, 0); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#463a2d';
+    ctx.fillRect(-12, -4, 5, 3); ctx.fillRect(4, -6, 6, 3); ctx.fillRect(-2, -3, 4, 3);
   }
 
   function saveBest() {
@@ -328,6 +589,15 @@
     ctx.fillStyle = body;
     ctx.beginPath(); ctx.ellipse(6, 0, 40, 16, 0, 0, 6.283); ctx.fill();
     ctx.beginPath(); ctx.ellipse(-26, -3, 18, 9, 0, 0, 6.283); ctx.fill();
+    // Israeli flag insignia on the fuselage: white field, blue stripes, Star of David.
+    ctx.save(); ctx.translate(-12, -1);
+    ctx.fillStyle = '#f7f7f0'; ctx.fillRect(-12, -7, 24, 14);
+    ctx.strokeStyle = '#263b72'; ctx.lineWidth = 1; ctx.strokeRect(-12, -7, 24, 14);
+    ctx.fillStyle = '#2d55a4'; ctx.fillRect(-10.5, -5.5, 21, 2); ctx.fillRect(-10.5, 3.5, 21, 2);
+    ctx.strokeStyle = '#2d55a4'; ctx.lineWidth = 1.2;
+    ctx.beginPath(); ctx.moveTo(0, -3.8); ctx.lineTo(-3.5, 2.4); ctx.lineTo(3.5, 2.4); ctx.closePath(); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, 3.6); ctx.lineTo(-3.5, -2.6); ctx.lineTo(3.5, -2.6); ctx.closePath(); ctx.stroke();
+    ctx.restore();
     // cockpit
     const cg = ctx.createLinearGradient(20, -12, 34, 6);
     cg.addColorStop(0, '#bfe6ff'); cg.addColorStop(1, '#4f9ad0');
@@ -385,6 +655,11 @@
       ctx.beginPath(); ctx.arc(74 + i * 14, 66, 5, 0, 6.283);
       ctx.fillStyle = i < P.bombs ? '#8fd0ff' : 'rgba(140,160,190,0.25)'; ctx.fill();
     }
+    if (state.warCrimes > 0) {
+      const g = state.wcFlash > 0 ? Math.min(1, state.wcFlash) : 0;
+      ctx.fillStyle = g > 0 ? '#ffffff' : '#ff6b5a';
+      ctx.fillText('WAR CRIMES ' + state.warCrimes, 18, 90);
+    }
     ctx.fillStyle = '#8b97a8'; ctx.textAlign = 'right';
     ctx.fillText('BEST ' + Math.max(state.best, state.score), VW - 18, 30);
     ctx.textAlign = 'left';
@@ -412,7 +687,8 @@
       ctx.fillStyle = '#ff6b5a'; ctx.font = '700 44px ui-monospace,Menlo,monospace';
       ctx.fillText('CHOPPA DOWN', VW / 2, VH / 2 - 40);
       ctx.fillStyle = '#ffe6bf'; ctx.font = '600 20px ui-monospace,Menlo,monospace';
-      ctx.fillText('score ' + state.score + '  ·  wave ' + state.wave, VW / 2, VH / 2 + 4);
+      ctx.fillText('score ' + state.score + '  ·  wave ' + state.wave
+                   + (state.warCrimes > 0 ? '  ·  war crimes ' + state.warCrimes : ''), VW / 2, VH / 2 + 4);
       const blink = 0.55 + 0.45 * Math.sin(state.t * 6);
       ctx.globalAlpha = blink; ctx.fillStyle = '#ffd27a';
       ctx.fillText('press R to fly again', VW / 2, VH / 2 + 46); ctx.globalAlpha = 1;
@@ -425,17 +701,37 @@
     if (state.shake > 0) { ctx.translate((Math.random() - 0.5) * 10 * state.shake, (Math.random() - 0.5) * 10 * state.shake); }
     drawSky();
     drawTerrain();
+    drawStructs();
     for (const e of enemies) drawEnemy(e);
     // bullets
     ctx.lineWidth = 3; ctx.lineCap = 'round';
     for (const b of bullets) { ctx.strokeStyle = '#ffe066'; ctx.beginPath(); ctx.moveTo(b.x - state.camX, b.y); ctx.lineTo(b.x - state.camX - b.vx * 0.012, b.y - b.vy * 0.012); ctx.stroke(); }
     for (const b of ebullets) { ctx.fillStyle = '#ff8a5c'; ctx.beginPath(); ctx.arc(b.x - state.camX, b.y, 5, 0, 6.283); ctx.fill(); }
+    for (const m of missiles) {
+      const sx = m.x - state.camX, ang = Math.atan2(m.vy, m.vx);
+      ctx.save(); ctx.translate(sx, m.y); ctx.rotate(ang);
+      ctx.fillStyle = '#d8dde6'; ctx.fillRect(-6, -2, 12, 4);
+      ctx.fillStyle = '#2b2e36';
+      ctx.beginPath(); ctx.moveTo(6, -2); ctx.lineTo(10, 0); ctx.lineTo(6, 2); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#ff5a3c';
+      ctx.beginPath(); ctx.moveTo(-6, -2); ctx.lineTo(-13, 0); ctx.lineTo(-6, 2); ctx.closePath(); ctx.fill();
+      ctx.restore();
+    }
     for (const b of bombs) {
       const sx = b.x - state.camX;
       ctx.fillStyle = '#3a3f4a'; ctx.beginPath(); ctx.ellipse(sx, b.y, 4, 7, 0, 0, 6.283); ctx.fill();
       ctx.fillStyle = '#e8c06a'; ctx.fillRect(sx - 5, b.y - 6, 10, 2);
       ctx.beginPath(); ctx.moveTo(sx - 4, b.y + 6); ctx.lineTo(sx, b.y + 12); ctx.lineTo(sx + 4, b.y + 6);
       ctx.closePath(); ctx.fillStyle = '#2a2e36'; ctx.fill();
+    }
+    for (const f of floaters) {
+      ctx.globalAlpha = Math.max(0, Math.min(1, f.life));
+      ctx.fillStyle = f.col;
+      ctx.font = '700 14px ui-monospace,Menlo,monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(f.text, f.x - state.camX, f.y);
+      ctx.textAlign = 'left';
+      ctx.globalAlpha = 1;
     }
     drawChopper();
     for (const bm of booms) {
@@ -463,5 +759,5 @@
   }
   state.camX = -40; reset();
   requestAnimationFrame(loop);
-  if (location.hash === "#debug") window.DC = { state, enemies, bullets, ebullets, parts, bombs, booms, P, mouse, keys, get camX(){return state.camX;} };
+  if (location.hash === "#debug") window.DC = { state, enemies, bullets, ebullets, parts, bombs, booms, structs, missiles, P, mouse, keys, ensureStructs, get genX(){return genX;}, get camX(){return state.camX;}, frame(dt){ update(dt); draw(); } };
 })();
