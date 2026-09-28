@@ -18,6 +18,7 @@
     keys[e.code] = true;
     if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code)) e.preventDefault();
     if (e.code === 'KeyR' && state.over) reset();
+    if (e.code === 'KeyB') wantBomb = true;
   });
   window.addEventListener('keyup', e => { keys[e.code] = false; });
 
@@ -60,10 +61,14 @@
     state.spawnCd = 1.2; state.waveTimer = 0; state.shake = 0;
     P.x = 260; P.y = 250; P.vx = 0; P.vy = 0;
     P.hp = 100; P.heat = 0; P.fireCd = 0; P.rotor = 0; P.hitFlash = 0;
+    P.bombs = 5; P.bombCd = 0; P.bombRegen = 0;
     enemies.length = 0; bullets.length = 0; ebullets.length = 0; parts.length = 0;
+    bombs.length = 0; booms.length = 0; wantBomb = false;
     for (let i = 0; i < 5; i++) spawnEnemy(360 + i * 260);
   }
   const enemies = [], bullets = [], ebullets = [], parts = [];
+  const bombs = [], booms = [];
+  let wantBomb = false;
   const EN = ['raider', 'raider', 'raider', 'thrower', 'thrower', 'gunner'];
 
   function spawnEnemy(x0) {
@@ -130,11 +135,28 @@
       if (firing && P.fireCd <= 0) { fire(); P.fireCd = 0.055; }
       if (P.heat >= 100) { /* overheated */ }
 
+      // bombs
+      P.bombCd = Math.max(0, P.bombCd - dt);
+      P.bombRegen += dt;
+      if (P.bombRegen >= 5 && P.bombs < 6) { P.bombs++; P.bombRegen = 0; }
+      if (wantBomb) {
+        if (P.bombs > 0 && P.bombCd <= 0) {
+          P.bombs--; P.bombCd = 0.35;
+          bombs.push({ x: P.x, y: P.y + 16, vx: P.vx * 0.5,
+                       vy: Math.max(50, P.vy + 30), life: 3 });
+          burst(P.x, P.y + 16, 3, '#cfe3ff', 40);
+        }
+        wantBomb = false;
+      }
+
       if (P.hitFlash > 0) P.hitFlash -= dt;
 
       // waves
       state.waveTimer += dt;
-      if (state.waveTimer > 18) { state.waveTimer = 0; state.wave++; }
+      if (state.waveTimer > 18) {
+        state.waveTimer = 0; state.wave++;
+        P.bombs = Math.min(8, P.bombs + 2);   // resupply each wave
+      }
       state.spawnCd -= dt;
       const maxAlive = 4 + state.wave;
       if (state.spawnCd <= 0 && enemies.filter(e => e.alive).length < maxAlive) {
@@ -180,6 +202,24 @@
     }
     for (let i = bullets.length - 1; i >= 0; i--) if (bullets[i].life <= 0 || bullets[i].x > state.camX + VW + 60) bullets.splice(i, 1);
 
+    // bombs: gravity, ground/enemy impact, then blast
+    for (const b of bombs) {
+      b.vy += 900 * dt; b.x += b.vx * dt; b.y += b.vy * dt; b.life -= dt;
+      let hit = false;
+      for (const e of enemies) {
+        if (!e.alive) continue;
+        if (Math.abs(b.x - e.x) < 22 && b.y > e.y - 54 && b.y < e.y + 4) { hit = true; break; }
+      }
+      const gy = groundY(b.x) - 2;
+      if (hit || b.y >= gy) { b.life = 0; explode(b.x, Math.min(b.y, gy)); }
+    }
+    for (let i = bombs.length - 1; i >= 0; i--)
+      if (bombs[i].life <= 0 || bombs[i].x < state.camX - 80) bombs.splice(i, 1);
+
+    // blast rings
+    for (const bm of booms) bm.life -= dt;
+    for (let i = booms.length - 1; i >= 0; i--) if (booms[i].life <= 0) booms.splice(i, 1);
+
     // enemy bullets
     for (const b of ebullets) {
       b.vy += b.g * dt; b.x += b.vx * dt; b.y += b.vy * dt; b.life -= dt;
@@ -194,6 +234,22 @@
     // particles
     for (const p of parts) { p.vy += 420 * dt; p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt; }
     for (let i = parts.length - 1; i >= 0; i--) if (parts[i].life <= 0) parts.splice(i, 1);
+  }
+
+  function explode(x, y) {
+    booms.push({ x, y, life: 0.5, max: 0.5 });
+    state.shake = Math.max(state.shake, 1.1);
+    burst(x, y, 26, '#ffd06b', 320);
+    burst(x, y, 14, '#ff6b3c', 220);
+    const R = 96;
+    for (const e of enemies) {
+      if (!e.alive) continue;
+      const dx = e.x - x, dy = (e.y - 26) - y;
+      if (dx * dx + dy * dy < R * R) {
+        e.alive = false; state.score += 100;
+        burst(e.x, e.y - 26, 16, '#ff6b6b', 240);
+      }
+    }
   }
 
   function saveBest() {
@@ -324,6 +380,11 @@
     ctx.fillStyle = '#fff2d0'; ctx.textAlign = 'left';
     ctx.fillText('SCORE ' + state.score, 18, 30);
     ctx.fillStyle = '#ffd27a'; ctx.fillText('WAVE ' + state.wave, 18, 50);
+    ctx.fillStyle = '#cfe3ff'; ctx.fillText('BOMBS', 18, 70);
+    for (let i = 0; i < 6; i++) {
+      ctx.beginPath(); ctx.arc(74 + i * 14, 66, 5, 0, 6.283);
+      ctx.fillStyle = i < P.bombs ? '#8fd0ff' : 'rgba(140,160,190,0.25)'; ctx.fill();
+    }
     ctx.fillStyle = '#8b97a8'; ctx.textAlign = 'right';
     ctx.fillText('BEST ' + Math.max(state.best, state.score), VW - 18, 30);
     ctx.textAlign = 'left';
@@ -369,7 +430,23 @@
     ctx.lineWidth = 3; ctx.lineCap = 'round';
     for (const b of bullets) { ctx.strokeStyle = '#ffe066'; ctx.beginPath(); ctx.moveTo(b.x - state.camX, b.y); ctx.lineTo(b.x - state.camX - b.vx * 0.012, b.y - b.vy * 0.012); ctx.stroke(); }
     for (const b of ebullets) { ctx.fillStyle = '#ff8a5c'; ctx.beginPath(); ctx.arc(b.x - state.camX, b.y, 5, 0, 6.283); ctx.fill(); }
+    for (const b of bombs) {
+      const sx = b.x - state.camX;
+      ctx.fillStyle = '#3a3f4a'; ctx.beginPath(); ctx.ellipse(sx, b.y, 4, 7, 0, 0, 6.283); ctx.fill();
+      ctx.fillStyle = '#e8c06a'; ctx.fillRect(sx - 5, b.y - 6, 10, 2);
+      ctx.beginPath(); ctx.moveTo(sx - 4, b.y + 6); ctx.lineTo(sx, b.y + 12); ctx.lineTo(sx + 4, b.y + 6);
+      ctx.closePath(); ctx.fillStyle = '#2a2e36'; ctx.fill();
+    }
     drawChopper();
+    for (const bm of booms) {
+      const t = 1 - bm.life / bm.max, sx = bm.x - state.camX;
+      ctx.globalAlpha = Math.max(0, 1 - t);
+      ctx.strokeStyle = '#ffd27a'; ctx.lineWidth = 3 * (1 - t) + 1;
+      ctx.beginPath(); ctx.arc(sx, bm.y, 12 + t * 84, 0, 6.283); ctx.stroke();
+      ctx.fillStyle = 'rgba(255,140,60,0.35)';
+      ctx.beginPath(); ctx.arc(sx, bm.y, 12 + t * 40, 0, 6.283); ctx.fill();
+      ctx.globalAlpha = 1;
+    }
     for (const p of parts) { ctx.globalAlpha = Math.max(0, p.life); ctx.fillStyle = p.col; ctx.fillRect(p.x - state.camX - 1.5, p.y - 1.5, 3, 3); }
     ctx.globalAlpha = 1;
     ctx.restore();
@@ -386,5 +463,5 @@
   }
   state.camX = -40; reset();
   requestAnimationFrame(loop);
-  if (location.hash === "#debug") window.DC = { state, enemies, bullets, ebullets, parts, P, mouse, keys, get camX(){return state.camX;} };
+  if (location.hash === "#debug") window.DC = { state, enemies, bullets, ebullets, parts, bombs, booms, P, mouse, keys, get camX(){return state.camX;} };
 })();
