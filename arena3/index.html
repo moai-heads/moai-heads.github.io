@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>ARENA3 — a bounded arena roguelike (ioquake3 + OpenArena)</title>
+<style>
+  html,body{margin:0;height:100%;background:#08090c;color:#cfd6e4;font-family:system-ui,Segoe UI,Roboto,sans-serif;overflow:hidden}
+  #wrap{position:fixed;inset:0}
+  canvas{display:block;width:100%;height:100%;object-fit:contain;background:#000;cursor:crosshair}
+  #ui{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at 50% 30%,#141821,#05060a);z-index:10;text-align:center;padding:24px}
+  #ui h1{margin:0 0 6px;font-size:clamp(28px,6vw,64px);letter-spacing:.12em;color:#ff5a3c;text-shadow:0 0 24px #ff2a00}
+  #ui p{max-width:640px;line-height:1.5;color:#93a0b8}
+  #ui .k{color:#ffd479}
+  #ui .small{font-size:12px;color:#5f6b82;margin-top:18px}
+  button{margin-top:22px;padding:14px 34px;font-size:18px;letter-spacing:.1em;background:#ff4a2a;color:#fff;border:0;border-radius:6px;cursor:pointer}
+  button:hover{background:#ff6a4a}
+  #bar{position:fixed;left:0;right:0;bottom:0;height:34px;display:flex;align-items:center;gap:14px;padding:0 14px;font-size:12px;color:#7d8aa3;background:linear-gradient(transparent,#05060acc);z-index:5;pointer-events:none}
+  #stat{color:#ffd479}
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="canvas" tabindex="0"></canvas></div>
+<div id="bar"><span>ARENA3</span><span id="stat">booting…</span></div>
+<div id="ui">
+  <div>
+    <h1>ARENA3</h1>
+    <p>A bounded, Quake&nbsp;3-flavoured <b>arena roguelike</b> running on <b>ioquake3</b>
+       with <b>OpenArena</b>'s free data set. Clear each room's bots, then walk into one
+       of two portals &mdash; each portal carries a permanent upgrade. Clear <b>5 rooms</b> to win.</p>
+    <p class="small">
+      <span class="k">WASD</span> move &nbsp;·&nbsp; <span class="k">Mouse</span> look &nbsp;·&nbsp;
+      <span class="k">Click</span> shoot &nbsp;·&nbsp; <span class="k">1-9</span> weapons &nbsp;·&nbsp;
+      <span class="k">Esc</span> menu
+    </p>
+    <button id="go">ENTER THE ARENA</button>
+    <p class="small">OpenArena data © its authors, GPL/CC-BY-SA. ioquake3 © id Software / ioquake3 team.</p>
+  </div>
+</div>
+<script type="module">
+const CLIENT_NAME = 'ioquake3';
+const BASEGAME = 'baseoa';
+const canvas = document.getElementById('canvas');
+const stat = document.getElementById('stat');
+window.addEventListener('error', e => stat.textContent = 'ERR ' + (e.message||''));
+
+const params = new URLSearchParams(location.search);
+let args = `
+  +set sv_pure 0
+  +set net_enabled 0
+  +set r_mode -2
+  +set com_basegame "${BASEGAME}"
+  +set fs_basegame ""
+  +set fs_game ""
+  +set a3_enable 1
+  +set g_gametype 0
+  +set bot_enable 1
+  +set sv_maxclients 8
+  +set s_initsound 1
+  +map oa_dm1
+`;
+if (params.get('args')) args += ' ' + params.get('args');
+
+const configPromise = fetch('./a3-config.json').then(r => r.ok ? r.json() : ({}));
+const mod = (await import('./ioquake3.js')).default;
+
+async function boot(){
+  document.getElementById('ui').remove();
+  stat.textContent = 'downloading data…';
+  await mod({
+    canvas,
+    arguments: args.trim().split(/\s+/),
+    locateFile: f => './' + f,
+    print: t => { try{console.log(String(t).trim());}catch(e){} }, err: t => stat.textContent = String(t).slice(0,120),
+    preRun: [async (m) => {
+      m.addRunDependency('fs');
+      try {
+        const config = await configPromise;
+        const files = (config[BASEGAME]||{}).files||[];
+        let done = 0;
+        for (const f of files){
+          stat.textContent = `loading ${f.src.split('/').pop()} (${++done}/${files.length})…`;
+          const r = await fetch(f.src);
+          const b = new Uint8Array(await r.arrayBuffer());
+          const name = f.src.match(/[^/]+$/)[0];
+          m.FS.mkdirTree(f.dst); m.FS.writeFile(`${f.dst}/${name}`, b);
+        }
+        stat.textContent = 'starting…';
+      } finally { m.removeRunDependency('fs'); }
+    }],
+  });
+}
+document.getElementById('go').addEventListener('click', () => { boot().catch(e=>{stat.textContent='ERR '+e.message; console.error(e);}); });
+</script>
+</body>
+</html>
