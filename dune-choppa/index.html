@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<meta name="theme-color" content="#101a3a">
+<title>DUNE CHOPPA // GUNSHIP</title>
+<style>
+  :root{--sand:#f0b46b;--glow:#ffd27a;}
+  *{box-sizing:border-box;}
+  html,body{margin:0;min-height:100%;background:#05070f;color:#cdd6e0;
+    font-family:ui-monospace,Menlo,Consolas,monospace;}
+  .wrap{max-width:1000px;margin:0 auto;padding:26px 16px 60px;}
+  h1{font-size:19px;letter-spacing:.5px;color:var(--sand);font-weight:700;margin:0 0 4px;}
+  h1 span{color:var(--glow);}
+  .sub{color:#5c6b7d;font-size:12px;margin-bottom:16px;}
+  .frame{border:1px solid #1b2436;border-radius:6px;overflow:hidden;background:#05070f;position:relative;}
+  canvas#game{display:block;width:100%;height:auto;touch-action:none;cursor:crosshair;}
+  .keys{margin-top:14px;font-size:12px;line-height:1.9;color:#9aa8b8;}
+  .keys b{color:#ffd27a;font-weight:600;}
+  a{color:#66b3ff;text-decoration:none;}a:hover{text-decoration:underline;}
+  .foot{margin-top:10px;font-size:11px;color:#4c5a6d;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>DUNE CHOPPA <span>// GUNSHIP</span></h1>
+  <div class="sub">a gunship over the orange dunes &middot; no engine, no assets &middot; pure canvas</div>
+  <div class="frame"><canvas id="game" width="960" height="540"></canvas></div>
+  <div class="keys">
+    <b>W A S D</b> / arrows &mdash; fly &nbsp;&middot;&nbsp; <b>mouse</b> &mdash; aim &nbsp;&middot;&nbsp;
+    <b>click / hold</b> or <b>space</b> &mdash; minigun &nbsp;&middot;&nbsp; <b>R</b> &mdash; restart<br>
+    watch the gun <b>heat</b> and your <b>hull</b>; don't let the raiders clip your rotors.
+  </div>
+  <div class="foot">part of the <a href="https://moai-heads.github.io/">moai-heads</a> desert series &middot; sibling of
+    <a href="https://moai-heads.github.io/dunechopa/">dunechopa</a></div>
+</div>
+<script src="game.js"></script>
+</body>
+</html>
