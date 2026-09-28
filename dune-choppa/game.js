@@ -17,6 +17,10 @@
   window.addEventListener('keydown', e => {
     keys[e.code] = true;
     if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code)) e.preventDefault();
+    if (state.phase === 'build') {
+      if (e.code === 'Digit1' || e.code === 'Digit2' || e.code === 'Digit3' || e.code === 'Digit4') state.buildSel = (+e.code.slice(5)) - 1;
+      if (e.code === 'Space' || e.code === 'Enter' || e.code === 'NumpadEnter') { startWave(); e.preventDefault(); }
+    }
     if (e.code === 'KeyR' && state.over) reset();
     if (e.code === 'KeyB') wantBomb = true;
   });
@@ -28,9 +32,9 @@
     return { x: (cx - r.left) * VW / r.width, y: (cy - r.top) * VH / r.height };
   }
   cv.addEventListener('mousemove', e => { const p = toLocal(e.clientX, e.clientY); mouse.x = p.x; mouse.y = p.y; });
-  cv.addEventListener('mousedown', e => { mouse.down = true; e.preventDefault(); });
+  cv.addEventListener('mousedown', e => { const p = toLocal(e.clientX, e.clientY); mouse.x = p.x; mouse.y = p.y; if (state.phase === 'build') handleBuildClick(p.x, p.y); else mouse.down = true; e.preventDefault(); });
   window.addEventListener('mouseup', () => { mouse.down = false; });
-  cv.addEventListener('touchstart', e => { e.preventDefault(); const t = e.touches[0]; const p = toLocal(t.clientX, t.clientY); mouse.x = p.x; mouse.y = p.y; mouse.down = true; }, {passive:false});
+  cv.addEventListener('touchstart', e => { e.preventDefault(); const t = e.touches[0]; const p = toLocal(t.clientX, t.clientY); mouse.x = p.x; mouse.y = p.y; if (state.phase === 'build') handleBuildClick(p.x, p.y); else mouse.down = true; }, {passive:false});
   cv.addEventListener('touchmove', e => { e.preventDefault(); const t = e.touches[0]; const p = toLocal(t.clientX, t.clientY); mouse.x = p.x; mouse.y = p.y; }, {passive:false});
   cv.addEventListener('touchend', e => { e.preventDefault(); mouse.down = false; }, {passive:false});
 
@@ -53,6 +57,7 @@
   const state = {
     over: false, win: false, score: 0, wave: 1, t: 0,
     warCrimes: 0, wcFlash: 0,
+    phase: 'fly', scrap: 120, buildSel: 0, buildMsg: '', buildMsgT: 0, turretCd: 0,
     spawnCd: 1.2, waveTimer: 0, shake: 0, best: +(localStorage.getItem('dc_best') || 0)
   };
 
@@ -61,6 +66,9 @@
     state.over = false; state.score = 0; state.wave = 1; state.t = 0;
     state.warCrimes = 0; state.wcFlash = 0;
     state.spawnCd = 1.2; state.waveTimer = 0; state.shake = 0;
+    state.phase = 'fly'; state.scrap = 120; state.buildSel = 0;
+    state.buildMsg = ''; state.buildMsgT = 0; state.turretCd = 0;
+    BASE.length = 0;
     P.x = 260; P.y = 250; P.vx = 0; P.vy = 0;
     P.hp = 100; P.heat = 0; P.fireCd = 0; P.rotor = 0; P.hitFlash = 0;
     P.bombs = 5; P.bombCd = 0; P.bombRegen = 0;
@@ -77,6 +85,35 @@
   const floaters = [];              // floating world-space text
   let genX = 900;                   // how far the world has been populated
   let wantBomb = false;
+
+  // ---- player base (built top-down between waves) ----
+  const BASE = [];                  // {gx,gy,kind,level}
+  const BUILD = {
+    turret: { name: 'TURRET', cost: 40, col: '#7fd0ff', desc: 'auto-fires at raiders from the chopper' },
+    bunker: { name: 'BUNKER', cost: 25, col: '#c9b18a', desc: '+8% hull armor per level' },
+    repair: { name: 'REPAIR', cost: 30, col: '#8fffa8', desc: 'heal 30 hull each wave' },
+    depot:  { name: 'DEPOT',  cost: 20, col: '#ffd27a', desc: '+1 bomb / wave, faster gun cooling' },
+  };
+  const DEF_ORDER = ['turret', 'bunker', 'repair', 'depot'];
+  const GRID_W = 12, GRID_H = 7, CELL = 54;
+  const GRID_X = (VW - GRID_W * CELL) / 2, GRID_Y = 96;
+  function countBase(kind) { let n = 0; for (const b of BASE) if (b.kind === kind) n += b.level; return n; }
+  function armorMul() { return Math.max(0.45, 1 - countBase('bunker') * 0.08); }
+  function nearestEnemy() { let best = null, bd = 1e9; for (const e of enemies) { if (!e.alive) continue; const d = Math.abs(e.x - P.x); if (d < bd) { bd = d; best = e; } } return best; }
+  function buildMsg(t) { state.buildMsg = t; state.buildMsgT = 1.4; }
+  function endWave() {
+    state.phase = 'build';
+    state.scrap += 60 + state.wave * 12;
+    const rep = countBase('repair'); if (rep > 0) P.hp = Math.min(100, P.hp + 30 * rep);
+    const dep = countBase('depot');  if (dep > 0) P.bombs = Math.min(10, P.bombs + 2 + dep);
+    buildMsg('wave ' + state.wave + ' cleared');
+  }
+  function startWave() {
+    state.wave++; state.phase = 'fly'; state.waveTimer = 0;
+    P.bombs = Math.min(10, P.bombs + 2 + countBase('depot'));
+    state.buildMsg = ''; state.buildMsgT = 0;
+    for (let i = 0; i < 3 + state.wave; i++) spawnEnemy(P.x + 700 + i * 180 + Math.random() * 120);
+  }
 
   // deterministic per-x RNG so clusters are stable if we ever revisit them
   function hash32(n) {
@@ -129,6 +166,12 @@
     ensureStructs();
     if (state.shake > 0) state.shake = Math.max(0, state.shake - dt * 3);
 
+    if (state.phase === 'build') {
+      for (const f of floaters) { f.life -= dt; f.y -= 22 * dt; }
+      for (let i = floaters.length - 1; i >= 0; i--) if (floaters[i].life <= 0) floaters.splice(i, 1);
+      if (state.buildMsgT > 0) state.buildMsgT -= dt;
+      return;
+    }
     if (!state.over) {
       // flight
       const ax = 1500, ay = 1400, damp = 0.90;
@@ -146,18 +189,33 @@
       P.y = Math.max(70, P.y);
       P.rotor += dt * 40;
       // ground crash
-      if (P.y > groundY(P.x) - 34) { P.y = groundY(P.x) - 34; P.vy = -120; P.hp -= 26; P.hitFlash = 0.3; state.shake = 1; }
+      if (P.y > groundY(P.x) - 34) { P.y = groundY(P.x) - 34; P.vy = -120; P.hp -= 26 * armorMul(); P.hitFlash = 0.3; state.shake = 1; }
 
       // camera
       const camTarget = P.x - 300;
       state.camX += (camTarget - state.camX) * Math.min(1, dt * 3.2);
 
       // firing
-      P.heat = Math.max(0, P.heat - dt * 34);
+      P.heat = Math.max(0, P.heat - dt * (34 + 6 * countBase('depot')));
       P.fireCd -= dt;
       const firing = (mouse.down || keys.Space) && P.heat < 100 && P.hitFlash <= 0;
       if (firing && P.fireCd <= 0) { fire(); P.fireCd = 0.055; }
       if (P.heat >= 100) { /* overheated */ }
+
+      // base turrets auto-fire at the nearest raider
+      const nTur = countBase('turret');
+      if (nTur > 0) {
+        state.turretCd -= dt;
+        if (state.turretCd <= 0) {
+          const tgt = nearestEnemy();
+          if (tgt) {
+            const ang = Math.atan2((tgt.y - 30) - P.y, tgt.x - P.x);
+            bullets.push({ x: P.x, y: P.y, vx: Math.cos(ang) * 820, vy: Math.sin(ang) * 820, life: 1.2 });
+            burst(P.x + Math.cos(ang) * 30, P.y, 1, '#8fd0ff', 90);
+            state.turretCd = Math.max(0.18, 0.9 / nTur);
+          } else state.turretCd = 0.25;
+        }
+      }
 
       // bombs
       P.bombCd = Math.max(0, P.bombCd - dt);
@@ -177,10 +235,7 @@
 
       // waves
       state.waveTimer += dt;
-      if (state.waveTimer > 18) {
-        state.waveTimer = 0; state.wave++;
-        P.bombs = Math.min(8, P.bombs + 2);   // resupply each wave
-      }
+      if (state.waveTimer > 18) { state.waveTimer = 0; endWave(); }
       state.spawnCd -= dt;
       const maxAlive = 4 + state.wave;
       if (state.spawnCd <= 0 && enemies.filter(e => e.alive).length < maxAlive) {
@@ -270,7 +325,7 @@
     for (const b of ebullets) {
       b.vy += b.g * dt; b.x += b.vx * dt; b.y += b.vy * dt; b.life -= dt;
       if (!state.over && Math.abs(b.x - P.x) < 34 && Math.abs(b.y - P.y) < 20) {
-        b.life = 0; P.hp -= 9; P.hitFlash = 0.35; state.shake = 0.8;
+        b.life = 0; P.hp -= 9 * armorMul(); P.hitFlash = 0.35; state.shake = 0.8;
         burst(P.x, P.y, 8, '#ff8a5c', 180);
         if (P.hp <= 0) { P.hp = 0; state.over = true; state.win = false; saveBest(); burst(P.x, P.y, 40, '#ff5a3c', 320); }
       }
@@ -297,7 +352,7 @@
       }
       if (!state.over && Math.abs(m.x - P.x) < 30 && Math.abs(m.y - P.y) < 22) {
         m.life = 0; explode(m.x, m.y, false, true);
-        P.hp -= 14; P.hitFlash = 0.4; state.shake = 1;
+        P.hp -= 14 * armorMul(); P.hitFlash = 0.4; state.shake = 1;
         burst(P.x, P.y, 12, '#ff8a5c', 220);
         if (P.hp <= 0) { P.hp = 0; state.over = true; state.win = false; saveBest(); burst(P.x, P.y, 40, '#ff5a3c', 320); }
         continue;
@@ -517,6 +572,89 @@
     if (state.score > state.best) { state.best = state.score; try { localStorage.setItem('dc_best', String(state.best)); } catch (e) {} }
   }
 
+  function drawBaseIcon(x, y, kind, level) {
+    const def = BUILD[kind];
+    ctx.save(); ctx.translate(x, y);
+    ctx.fillStyle = 'rgba(8,12,20,0.6)'; ctx.fillRect(-CELL/2+3, -CELL/2+3, CELL-6, CELL-6);
+    ctx.strokeStyle = def.col; ctx.lineWidth = 2;
+    if (kind === 'turret') { ctx.beginPath(); ctx.arc(0, 0, 11, 0, 6.283); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(13, -9); ctx.stroke(); }
+    else if (kind === 'bunker') { ctx.beginPath(); ctx.moveTo(-13, 9); ctx.lineTo(-13, -3); ctx.lineTo(0, -13); ctx.lineTo(13, -3); ctx.lineTo(13, 9); ctx.closePath(); ctx.stroke(); }
+    else if (kind === 'repair') { ctx.beginPath(); ctx.moveTo(-11, -11); ctx.lineTo(11, -11); ctx.lineTo(11, 11); ctx.lineTo(-11, 11); ctx.closePath(); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(-6, 0); ctx.lineTo(6, 0); ctx.moveTo(0, -6); ctx.lineTo(0, 6); ctx.stroke(); }
+    else if (kind === 'depot') { ctx.beginPath(); ctx.ellipse(0, 0, 12, 8, 0, 0, 6.283); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(-6, 0); ctx.lineTo(6, 0); ctx.stroke(); }
+    ctx.fillStyle = def.col;
+    for (let i = 0; i < level; i++) ctx.fillRect(-CELL/2 + 6 + i * 7, CELL/2 - 9, 5, 4);
+    ctx.restore();
+  }
+  function handleBuildClick(x, y) {
+    for (let i = 0; i < 4; i++) { const bw = 156, bx = GRID_X + i * (bw + 4), by = VH - 52; if (x >= bx && x < bx + bw && y >= by && y < by + 38) { state.buildSel = i; return; } }
+    const lb = { x: VW - 276, y: VH - 52, w: 256, h: 38 };
+    if (x >= lb.x && x < lb.x + lb.w && y >= lb.y && y < lb.y + lb.h) { startWave(); return; }
+    if (x >= GRID_X && x < GRID_X + GRID_W * CELL && y >= GRID_Y && y < GRID_Y + GRID_H * CELL) {
+      const gx = Math.floor((x - GRID_X) / CELL), gy = Math.floor((y - GRID_Y) / CELL);
+      const occ = BASE.find(b => b.gx === gx && b.gy === gy);
+      const kind = DEF_ORDER[state.buildSel];
+      if (!occ) {
+        if (state.scrap >= BUILD[kind].cost) { state.scrap -= BUILD[kind].cost; BASE.push({ gx, gy, kind, level: 1 }); }
+        else buildMsg('not enough scrap');
+      } else {
+        const uc = BUILD[occ.kind].cost;
+        if (occ.level >= 3) buildMsg('max level');
+        else if (state.scrap >= uc) { state.scrap -= uc; occ.level++; }
+        else buildMsg('not enough scrap');
+      }
+    }
+  }
+  function drawBuild() {
+    ctx.fillStyle = '#070b16'; ctx.fillRect(0, 0, VW, VH);
+    ctx.textAlign = 'left'; ctx.fillStyle = '#f0b46b';
+    ctx.font = '700 22px ui-monospace,Menlo,monospace';
+    ctx.fillText('BASE // DEPLOYMENT', 24, 40);
+    ctx.fillStyle = '#8b97a8'; ctx.font = '600 13px ui-monospace,Menlo,monospace';
+    ctx.fillText('build your base, then launch wave ' + (state.wave + 1) + '  ·  click a cell to place / upgrade', 24, 62);
+    ctx.textAlign = 'right'; ctx.fillStyle = '#ffd27a'; ctx.font = '700 18px ui-monospace,Menlo,monospace';
+    ctx.fillText('SCRAP ' + Math.floor(state.scrap), VW - 24, 40);
+    ctx.textAlign = 'left';
+    for (let gy = 0; gy < GRID_H; gy++) for (let gx = 0; gx < GRID_W; gx++) {
+      const x = GRID_X + gx * CELL, y = GRID_Y + gy * CELL;
+      ctx.fillStyle = ((gx + gy) & 1) ? 'rgba(30,42,64,0.55)' : 'rgba(24,34,54,0.55)';
+      ctx.fillRect(x, y, CELL, CELL);
+      ctx.strokeStyle = 'rgba(90,120,170,0.25)'; ctx.strokeRect(x + 0.5, y + 0.5, CELL - 1, CELL - 1);
+    }
+    for (const b of BASE) drawBaseIcon(GRID_X + b.gx * CELL + CELL / 2, GRID_Y + b.gy * CELL + CELL / 2, b.kind, b.level);
+    if (mouse.x >= GRID_X && mouse.x < GRID_X + GRID_W * CELL && mouse.y >= GRID_Y && mouse.y < GRID_Y + GRID_H * CELL) {
+      const gx = Math.floor((mouse.x - GRID_X) / CELL), gy = Math.floor((mouse.y - GRID_Y) / CELL);
+      const occ = BASE.find(b => b.gx === gx && b.gy === gy);
+      ctx.globalAlpha = 0.25; ctx.fillStyle = occ ? '#ffd27a' : BUILD[DEF_ORDER[state.buildSel]].col;
+      ctx.fillRect(GRID_X + gx * CELL + 3, GRID_Y + gy * CELL + 3, CELL - 6, CELL - 6); ctx.globalAlpha = 1;
+      ctx.strokeStyle = occ ? '#ffd27a' : '#7fd0ff'; ctx.lineWidth = 2;
+      ctx.strokeRect(GRID_X + gx * CELL + 1, GRID_Y + gy * CELL + 1, CELL - 2, CELL - 2);
+    }
+    for (let i = 0; i < 4; i++) {
+      const def = BUILD[DEF_ORDER[i]], bw = 156, bh = 38, bx = GRID_X + i * (bw + 4), by = VH - 52;
+      const sel = i === state.buildSel;
+      ctx.fillStyle = sel ? 'rgba(255,210,122,0.18)' : 'rgba(20,28,44,0.85)'; ctx.fillRect(bx, by, bw, bh);
+      ctx.strokeStyle = sel ? '#ffd27a' : 'rgba(90,120,170,0.5)'; ctx.lineWidth = sel ? 2 : 1; ctx.strokeRect(bx + 0.5, by + 0.5, bw - 1, bh - 1);
+      ctx.fillStyle = def.col; ctx.font = '700 13px ui-monospace,Menlo,monospace'; ctx.fillText((i + 1) + ' ' + def.name, bx + 10, by + 17);
+      ctx.fillStyle = '#8b97a8'; ctx.font = '600 11px ui-monospace,Menlo,monospace'; ctx.fillText(def.cost + ' scrap', bx + 10, by + 31);
+    }
+    ctx.fillStyle = '#5c6b7d'; ctx.font = '600 11px ui-monospace,Menlo,monospace';
+    ctx.fillText(DEF_ORDER && BUILD[DEF_ORDER[state.buildSel]].desc, GRID_X, VH - 58);
+    const lb = { x: VW - 276, y: VH - 52, w: 256, h: 38 };
+    ctx.fillStyle = 'rgba(120,220,140,0.16)'; ctx.fillRect(lb.x, lb.y, lb.w, lb.h);
+    ctx.strokeStyle = '#7fdc8c'; ctx.lineWidth = 2; ctx.strokeRect(lb.x + 0.5, lb.y + 0.5, lb.w - 1, lb.h - 1);
+    ctx.fillStyle = '#b8f0c4'; ctx.font = '700 15px ui-monospace,Menlo,monospace'; ctx.textAlign = 'center';
+    ctx.fillText('LAUNCH WAVE ' + (state.wave + 1) + '  [space]', lb.x + lb.w / 2, lb.y + 24);
+    if (state.buildMsgT > 0) {
+      ctx.globalAlpha = Math.min(1, state.buildMsgT * 2); ctx.fillStyle = '#ff6b5a';
+      ctx.font = '700 14px ui-monospace,Menlo,monospace';
+      ctx.fillText(state.buildMsg, VW / 2, GRID_Y - 8); ctx.globalAlpha = 1;
+    }
+    ctx.textAlign = 'left';
+  }
+
   // ---- draw ----
   function drawSky() {
     const g = ctx.createLinearGradient(0, 0, 0, GROUND + 60);
@@ -697,6 +835,7 @@
   }
 
   function draw() {
+    if (state.phase === 'build') { drawBuild(); return; }
     ctx.save();
     if (state.shake > 0) { ctx.translate((Math.random() - 0.5) * 10 * state.shake, (Math.random() - 0.5) * 10 * state.shake); }
     drawSky();
