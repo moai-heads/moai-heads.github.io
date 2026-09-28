@@ -34,12 +34,18 @@
   cv.addEventListener('touchend', e => { e.preventDefault(); mouse.down = false; }, {passive:false});
 
   // ---- world / terrain ----
-  const GROUND = VH * 0.80;
+  // original DUNE CHOPPA analytic hills: a 4-term sum whose biggest term is
+  // amplitude-modulated by a slow sine, so some hills run tall and others
+  // shallow. amplitudes are scaled to this 960x540 canvas.
+  const GROUND = VH * 0.72;
+  const HILL_SCALE = 0.53;
   function groundY(wx) {
-    return GROUND
-      + Math.sin(wx * 0.0016) * 46
-      + Math.sin(wx * 0.0041 + 1.3) * 22
-      + Math.sin(wx * 0.0092 + 2.7) * 9;
+    const mod = 0.62 + 0.38 * Math.sin(wx * 0.00090 + 0.4);
+    const big = 138.0 * Math.sin(wx * 0.00162 + 1.3) * mod;
+    const mid = 64.0 * Math.sin(wx * 0.00410 + 4.1);
+    const small = 21.0 * Math.sin(wx * 0.01020 + 2.2);
+    const grain = 4.0 * Math.sin(wx * 0.03100 + 0.7);
+    return GROUND - (big + mid + small + grain) * HILL_SCALE;
   }
 
   // ---- state ----
@@ -217,10 +223,25 @@
     }
     ctx.lineTo(VW, VH); ctx.closePath(); ctx.fillStyle = col; ctx.fill();
   }
+  // the near ground: drawn straight from groundY so the hills you see are the
+  // hills you fly into (collision, enemies and shadow all use groundY too).
+  function drawGroundLayer() {
+    ctx.beginPath(); ctx.moveTo(0, VH);
+    for (let x = 0; x <= VW; x += 4) ctx.lineTo(x, groundY(state.camX + x));
+    ctx.lineTo(VW, VH); ctx.closePath();
+    const g = ctx.createLinearGradient(0, GROUND - 160, 0, GROUND + 210);
+    g.addColorStop(0, '#f0bb72'); g.addColorStop(0.45, '#e0a860'); g.addColorStop(1, '#a86f3d');
+    ctx.fillStyle = g; ctx.fill();
+  }
   function drawTerrain() {
-    duneLayer(0.35, GROUND - 78, 30, '#8a5a3c', 0.0018, 0.0);
-    duneLayer(0.6, GROUND - 36, 34, '#b07a45', 0.0024, 1.1);
-    duneLayer(1.0, GROUND, 46, '#e0a860', 0.0016, 2.2);
+    duneLayer(0.35, GROUND - 128, 26, '#8a5a3c', 0.0018, 0.0);
+    duneLayer(0.6, GROUND - 74, 32, '#b07a45', 0.0024, 1.1);
+    drawGroundLayer();
+    // sunlit crest line on the near hills
+    ctx.strokeStyle = 'rgba(255,226,168,0.65)'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(0, groundY(state.camX));
+    for (let x = 0; x <= VW; x += 4) ctx.lineTo(x, groundY(state.camX + x));
+    ctx.stroke();
     // scrub
     ctx.fillStyle = '#6b4a2a';
     const startX = Math.floor((state.camX) / 90) * 90;
