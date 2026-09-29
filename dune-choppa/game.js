@@ -72,7 +72,7 @@
     state.phase = 'build'; state.scrap = 120; state.region = 0; state.airframes = 3;
     state.banner = ''; state.bannerT = 0;
     state.buildMsg = ''; state.buildMsgT = 0; state.turretCd = 0;
-    BASE.length = 0; REGIONS.length = 0; islCanvas = null; mapData = null; mapCanvas = null;
+    BASE.length = 0; REGIONS.length = 0; cityBuildings.length = 0; islCanvas = null; mapData = null; mapCanvas = null;
     P.x = 260; P.y = 250; P.vx = 0; P.vy = 0;
     P.hp = 100; P.heat = 0; P.fireCd = 0; P.rotor = 0; P.hitFlash = 0;
     P.bombs = 5; P.bombCd = 0; P.bombRegen = 0;
@@ -144,6 +144,7 @@
     const img = cx.createImageData(IW, IH), dat = img.data;
     const count = IW * IH, heights = new Float32Array(count);
     REGIONS.length = 0;
+    cityBuildings.length = 0;
     const cand = [];
 
     // Bake a fine height field, hillshade and tile-scale terrain texture.
@@ -331,6 +332,7 @@
   // cells are claimed off a boundary frontier so the blobs stay organic -- and
   // highways stitch the holdings together so the sprawl runs along the roads.
   let urban = null, urbanOwner = null, road = null, landMask = new Uint8Array(IW * IH);
+  const cityBuildings = []; // visible pixel-art houses/shops, persistent across sorties
   let cityDirty = true, cityAcc = 0;
   let urbanCount = [], frontier = [];
   const CITY_TICK = 0.26;
@@ -404,6 +406,89 @@
     cityDirty = true;
   }
   function syncCity() { for (let i = 0; i < REGIONS.length; i++) if (REGIONS[i].owned) citySeedRegion(i); rebuildRoads(); }
+
+  // Buildings are small pixel-art sprites baked into the same island buffer as
+  // the terrain and city pixels. Their row strings are intentionally chunky at
+  // the map's 2x nearest-neighbour display scale.
+  const CITY_SPRITES = {
+    house: [
+      '...t...', '..rRr..', '.rRRRr.', 'rRRRRRr',
+      '.wwwww.', '.wVwVw.', '.wwdww.', '..bbb..'
+    ],
+    shop: [
+      '....t....', '...rRr...', '..rRRRr..', '.rrrrrrr.',
+      'wwwwwwwww', 'wVwVwVwVw', 'wWwwdwwWw', '.bbbbbbb.'
+    ],
+    apartment: [
+      '....t....', '...rRr...', '..rRRRr..', '.rRRRRRr.',
+      'wWWWWWWWw', 'wVwVwVwVw', 'wWWWWWWWw', 'wVwVwVwVw',
+      'wWWwdWWWw', '.bbbbbbb.'
+    ]
+  };
+  const CITY_INK = {
+    t:[218,151,83], r:[123,64,48], R:[170,83,53],
+    w:[217,185,131], W:[165,135,96], V:[55,115,132],
+    d:[91,61,43], b:[51,59,54]
+  };
+  function addCityBuilding(idx, kind) {
+    const r = REGIONS[idx]; if (!r || !r.owned) return false;
+    const f = frontier[idx] || [], rows = CITY_SPRITES[kind] || CITY_SPRITES.house;
+    const w = rows[0].length, h = rows.length;
+    const buildingCount = cityBuildingCount(idx);
+    const searchRadius = 5 + Math.min(12, buildingCount * 0.6);
+    // First keep a one-pixel gap between footprints, then allow edge-touching
+    // if a town is hemmed in by coast or already-developed blocks.
+    for (let pass = 0; pass < 2; pass++) {
+      const gap = pass === 0 ? 1 : 0;
+      for (let tries = 0; tries < 320; tries++) {
+        let x, y;
+        if (f.length && crand() < 0.86) {
+          const src = f[(crand() * f.length) | 0];
+          const a = crand() * 6.283, rad = 1 + crand() * searchRadius;
+          x = Math.round(src % IW + Math.cos(a) * rad);
+          y = Math.round((src / IW | 0) + Math.sin(a) * rad);
+        } else {
+          const a = crand() * 6.283, rad = 4 + crand() * Math.max(18, searchRadius);
+          x = Math.round(r.px + Math.cos(a) * rad);
+          y = Math.round(r.py + Math.sin(a) * rad);
+        }
+        const x0 = x - (w >> 1), y0 = y - h + 1;
+        let fits = true;
+        for (let sy = 0; sy < h && fits; sy++) for (let sx = 0; sx < w; sx++) {
+          if (rows[sy][sx] !== '.' && !landAt(x0 + sx, y0 + sy)) { fits = false; break; }
+        }
+        if (!fits) continue;
+        let spaced = true;
+        for (const b of cityBuildings) {
+          const old = CITY_SPRITES[b.kind] || CITY_SPRITES.house;
+          const dx = Math.abs(b.x - x), dy = Math.abs(b.y - y);
+          if (dx < (w + old[0].length) / 2 + gap && dy < (h + old.length) / 2 + gap) { spaced = false; break; }
+        }
+        if (!spaced) continue;
+        cityBuildings.push({ region: idx, x, y, kind });
+        cityDirty = true;
+        return true;
+      }
+    }
+    return false;
+  }
+  function cityBuildingCount(idx) { let n = 0; for (const b of cityBuildings) if (b.region === idx) n++; return n; }
+  function growCitiesAfterRound() {
+    // A completed sortie is a visible construction beat: the urban fabric
+    // spreads and every owned settlement gets new homes, plus periodic shops
+    // and apartment blocks. The visual growth is persistent between waves.
+    for (let i = 0; i < 8; i++) cityStep();
+    for (let idx = 0; idx < REGIONS.length; idx++) {
+      const r = REGIONS[idx]; if (!r.owned) continue;
+      const room = Math.max(0, 64 + r.dev * 16 - cityBuildingCount(idx));
+      const target = Math.min(room, 1 + (state.wave % 3 === 0 ? 1 : 0) + (r.dev >= 2 ? 1 : 0));
+      for (let n = 0; n < target; n++) {
+        const kind = (state.wave + idx + n) % 5 === 0 ? 'apartment'
+                   : (state.wave + idx + n) % 3 === 0 ? 'shop' : 'house';
+        addCityBuilding(idx, kind);
+      }
+    }
+  }
   // renderCity bakes roads + city growth INTO the island's pixel buffer and
   // produces one unified map image. (the old code composited a translucent
   // overlay on top; this makes the city literally part of the map surface.)
@@ -442,6 +527,21 @@
       else if (nb >= 5 && h > 0.80) { R = 255; G = 206; B = 120; }  // lit windows
       else { const n = (h - 0.5) * 22; R += n; G += n; B += n; }
       d[o] = R; d[o+1] = G; d[o+2] = B; d[o+3] = 255;
+    }
+    // Add the discrete settlement buildings last so roofs/windows stay crisp
+    // above roads and terrain; transparent sprite cells preserve the map below.
+    for (const b of cityBuildings) {
+      const rows = CITY_SPRITES[b.kind] || CITY_SPRITES.house;
+      const w = rows[0].length, x0 = b.x - (w >> 1), y0 = b.y - rows.length + 1;
+      for (let sy = 0; sy < rows.length; sy++) for (let sx = 0; sx < w; sx++) {
+        const ch = rows[sy][sx], col = CITY_INK[ch];
+        if (col) {
+          const x = x0 + sx, y = y0 + sy;
+          if (!inb(x, y)) continue;
+          const o = (y * IW + x) * 4;
+          d[o] = col[0]; d[o+1] = col[1]; d[o+2] = col[2]; d[o+3] = 255;
+        }
+      }
     }
     cc.putImageData(img, 0, 0);
     cityDirty = false;
@@ -508,6 +608,7 @@
       state.over = true; state.win = false; saveBest();
       state.banner = ''; state.bannerT = 0;
     } else {
+      growCitiesAfterRound();
       state.phase = 'build'; P.hp = 100;
       state.banner = paid > 0 ? state.banner : 'SHOT DOWN \u2014 EXTRACTED';
       state.bannerCol = paid > 0 ? '#8fffa8' : '#ff9a6a';
@@ -530,7 +631,9 @@
       citySeedRegion(state.region);
       rebuildRoads();
       for (let k = 0; k < 4; k++) cityStep();  // a first burst of construction
+      for (let k = 0; k < 2; k++) addCityBuilding(state.region, 'house');
     }
+    growCitiesAfterRound();
     const paid = payYields();
     if (captured) {
       state.banner = rg.name + ' SECURED';
@@ -1082,7 +1185,7 @@
       ctx.fillText('terrain  ' + r.terrain, PX + 12, PY + 42);
       ctx.fillText('threat   ' + '^'.repeat(Math.min(5, r.threat)), PX + 12, PY + 59);
       ctx.fillStyle = r.owned ? '#8fffa8' : '#ff9a6a';
-      ctx.fillText('status   ' + (r.owned ? 'SECURED' : 'hostile'), PX + 12, PY + 76);
+      ctx.fillText('status   ' + (r.owned ? ('SECURED · city ' + cityBuildingCount(state.region)) : 'hostile'), PX + 12, PY + 76);
       ctx.fillStyle = '#5d6b80'; ctx.fillRect(PX + 10, PY + 86, PW - 20, 1);
       if (r.owned) {
         const tier = DEV_TIERS[r.dev];
@@ -1433,7 +1536,8 @@
   state.camX = -40; reset();
   requestAnimationFrame(loop);
   if (location.hash === "#debug") window.DC = { state, REGIONS, BASE, DEV_TIERS, buildAtRegion, developRegion, devYield, totalIncome, payYields, shotDown, endWave, startWave, reset, buildIsland, mapRect, handleBuildClick, enemies, bullets, ebullets, parts, bombs, booms, structs, missiles, P, mouse, keys, ensureStructs, get genX(){return genX;}, get camX(){return state.camX;}, frame(dt){ update(dt); draw(); },
-    syncCity, cityStep, rebuildRoads, renderCity,
+    syncCity, cityStep, rebuildRoads, renderCity, growCitiesAfterRound, addCityBuilding, cityBuildingCount,
+    get cityBuildings(){return cityBuildings;},
     get urban(){return urban;}, get road(){return road;}, get landMask(){return landMask;},
     get mapCanvas(){return mapCanvas;}, get cityCanvas(){return mapCanvas;}, get cityDirty(){return cityDirty;} };
 })();
