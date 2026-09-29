@@ -20,6 +20,14 @@
   .keys b{color:#ffd27a;font-weight:600;}
   a{color:#66b3ff;text-decoration:none;}a:hover{text-decoration:underline;}
   .foot{margin-top:10px;font-size:11px;color:#4c5a6d;}
+  .bar{margin-top:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;}
+  button#autoplayBtn{cursor:pointer;font:700 13px ui-monospace,Menlo,Consolas,monospace;
+    letter-spacing:.5px;color:#0a1220;background:var(--glow);border:1px solid #ffe6bf;
+    border-radius:6px;padding:9px 16px;transition:background .12s,color .12s,box-shadow .12s;}
+  button#autoplayBtn:hover{box-shadow:0 0 0 3px rgba(255,210,122,.22);}
+  button#autoplayBtn.on{background:#ff6b5a;border-color:#ff9a8a;color:#1a0a08;
+    box-shadow:0 0 0 3px rgba(255,107,90,.22);}
+  .hint{font-size:11px;color:#4c5a6d;}
 </style>
 </head>
 <body>
@@ -27,17 +35,33 @@
   <h1>DUNE CHOPPA <span>// ANCESTORS</span></h1>
   <div class="sub">turn-based island war &middot; gunship battles &middot; no engine, no assets &middot; pure canvas</div>
   <div class="frame"><canvas id="game" width="960" height="540"></canvas></div>
+  <div class="bar">
+    <button id="autoplayBtn" type="button">&#9654;  AUTOPLAY DEMO</button>
+    <span class="hint">watch the AI play both sides — drafts, every action type, and the battles. loops forever.</span>
+  </div>
   <div class="keys">
-    <b>dune choppa: ancestors</b> &mdash; a turn-based war for the island.<br>
-    each round <b>pick 1 of 3 ancestors</b> (<b>1-3</b>) to gain <b>favor</b> (~10 turns each), then play their <b>3 actions</b>.<br>
-    <b>click a tile</b> to act: <b>produce</b> (seeds), <b>recruit</b> (then 1/2/3 = soldier/archer/rider), <b>muster</b> (draft every city), <b>build</b> (flag/gold), <b>trade</b>, <b>move</b> (click your army, then a neighbouring tile).<br>
-    taking a tile with an <b>enemy army</b> or a <b>castle</b> boots you into a live <b>gunship battle</b> &mdash; win it and the tile is yours.<br>
-    <b>space</b> / <b>end turn</b> skips an action &nbsp;&middot;&nbsp; take the <b>enemy castle</b> to win &nbsp;&middot;&nbsp; lose yours and it's over.<br>
-    <b>battle</b>: <b>W A S D</b> fly &nbsp;&middot;&nbsp; <b>mouse</b> aim &nbsp;&middot;&nbsp; <b>click/hold</b> minigun &nbsp;&middot;&nbsp; <b>B</b> bomb &nbsp;&middot;&nbsp; <b>R</b> restart.
+    <b>dune choppa: ancestors</b> &mdash; a turn-based war for the island, modern-warfare skin.<br>
+    each round <b>draft 1 of 3 commanders</b> (<b>1-3</b>), then play their <b>3 actions</b>.<br>
+    <b>l</b>ogistics &rarr; <b>supply / fuel / intel</b> &nbsp;&middot;&nbsp; <b>construct</b> depots, barracks, intel centers &amp; motor pools &nbsp;&middot;&nbsp; <b>deploy</b> units &nbsp;&middot;&nbsp; <b>requisition</b> trade &nbsp;&middot;&nbsp; <b>reinforce</b> drafts infantry at every barracks &nbsp;&middot;&nbsp; <b>fire mission</b> airstrike / EMP / supply drop &nbsp;&middot;&nbsp; <b>maneuver</b> click your army, then a neighbouring tile.<br>
+    units are pure <b>rock-paper-scissors</b>: <b>INF &gt; ART &gt; ARM &gt; HEL &gt; DRN &gt; INF</b>. battles <b>auto-resolve</b> from the unit mix &mdash; you just <b>watch the playback</b> and the tile changes hands.<br>
+    <b>space</b> / <b>end turn</b> skips an action &nbsp;&middot;&nbsp; take the <b>enemy HQ</b> to win &nbsp;&middot;&nbsp; lose yours and it's over &nbsp;&middot;&nbsp; hold <b>3 objectives</b> for 2 rounds to win.<br>
+    <b>R</b> restarts after the war ends.
   </div>
   <div class="foot">part of the <a href="https://moai-heads.github.io/">moai-heads</a> desert series &middot; sibling of
     <a href="https://moai-heads.github.io/dunechopa/">dunechopa</a></div>
 </div>
-<script src="game.js"></script>
+<script src="game.js?v=20260929-autoplay-us"></script>
+<script>
+(function(){
+  function wire(){
+    var b = document.getElementById("autoplayBtn");
+    if (!b) return;
+    if (!window.DCAuto) { setTimeout(wire, 50); return; }
+    b.addEventListener("click", function(){ window.DCAuto.toggle(); });
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", wire);
+  else wire();
+})();
+</script>
 </body>
 </html>
