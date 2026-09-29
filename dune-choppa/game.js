@@ -61,7 +61,8 @@
     warCrimes: 0, wcFlash: 0,
     phase: 'build', region: 0, scrap: 120, airframes: 3, banner: '', bannerT: 0, bannerCol: '#8fffa8',
     buildMsg: '', buildMsgT: 0, turretCd: 0,
-    spawnCd: 1.2, waveTimer: 0, shake: 0, best: +(localStorage.getItem('dc_best') || 0)
+    spawnCd: 1.2, waveTimer: 0, shake: 0, best: +(localStorage.getItem('dc_best') || 0),
+    battle: -1, mode: 'fly'
   };
 
   const P = {};
@@ -73,6 +74,8 @@
     state.banner = ''; state.bannerT = 0;
     state.buildMsg = ''; state.buildMsgT = 0; state.turretCd = 0;
     BASE.length = 0; REGIONS.length = 0; cityBuildings.length = 0; islCanvas = null; mapData = null; mapCanvas = null;
+    HOSTILES.length = 0; BATTLES.length = 0; hoCells = null; hoOwner = null; hoFrontier = [];
+    state.battle = -1; state.mode = 'fly';
     P.x = 260; P.y = 250; P.vx = 0; P.vy = 0;
     P.hp = 100; P.heat = 0; P.fireCd = 0; P.rotor = 0; P.hitFlash = 0;
     P.bombs = 5; P.bombCd = 0; P.bombRegen = 0;
@@ -99,6 +102,17 @@
     depot:  { name: 'DEPOT',  cost: 20, col: '#ffd27a', desc: '+1 bomb / wave, faster gun cooling' },
   };
   const DEF_ORDER = ['turret', 'bunker', 'repair', 'depot'];
+
+  // ---- opposing forces (hostile strongholds) ----
+  // Enemy bases sit on the island, develop over rounds, and push battles onto
+  // the map between their stronghold and your cities. Ignore a battle and the
+  // front advances (you lose ground); sortie into it and you blunt/destroy the base.
+  const HOSTILES = [];              // {px,py,name,dev,grow,alive}
+  const BATTLES = [];               // {hi,region,x,y,ttl,ttlMax,dev,name}
+  let hoCells = null, hoOwner = null;   // hostile territory footprint (like urban)
+  let hoFrontier = [];
+  const HOSTILE_NAMES = ['RED COMPOUND','IRON WORKS','BLACK KEEP','SCORPION NEST','ASH FORTRESS','SABLE YARD'];
+  const HOSTILE_CAP = [10, 24, 42, 68];   // footprint cells by dev level
 
   // ---- campaign island: a procedural per-pixel map, rendered low-res then
   // nearest-neighbour upscaled for the pixel-art look (canvas2d has no shader
@@ -364,9 +378,152 @@
     frontier = REGIONS.map(() => []);
     cityDirty = true; cityAcc = 0; crandState = (seed * 1e6) | 0;
     for (let i = 0; i < REGIONS.length; i++) if (REGIONS[i].owned) citySeedRegion(i);
+    // enemy territory for the fresh island
+    hoCells = new Uint8Array(IW * IH);
+    hoOwner = new Int8Array(IW * IH).fill(-1);
+    hoFrontier = [];
+    spawnHostiles();
     rebuildRoads();
   }
   const REGIONS = [];
+  // ---- hostile territory helpers ----
+  function hostileAt(x, y) { return inb(x, y) && hoOwner && hoOwner[y * IW + x] >= 0; }
+  function hostileClaim(x, y, idx) {
+    const i = y * IW + x;
+    if (!inb(x, y) || !landAt(x, y) || !hoCells || hoCells[i]) return false;
+    if (urban[i]) return false;                 // never grow over the player's cities
+    hoCells[i] = 1; hoOwner[i] = idx; hoFrontier[idx].push(i);
+    cityDirty = true; return true;
+  }
+  function hostileCount(idx) { let n = 0; for (let i = 0; i < hoOwner.length; i++) if (hoOwner[i] === idx) n++; return n; }
+  function hostileGrow(h, n) {
+    const idx = HOSTILES.indexOf(h); if (idx < 0) return;
+    const cap = HOSTILE_CAP[Math.min(h.dev, HOSTILE_CAP.length - 1)];
+    let cur = hostileCount(idx), tries = n * 5;
+    while (cur < cap && tries-- > 0) {
+      const f = hoFrontier[idx]; if (!f.length) break;
+      const ci = f[(crand() * f.length) | 0];
+      const x = ci % IW, y = (ci / IW) | 0;
+      let placed = false;
+      for (let a = 0; a < 6 && !placed; a++) {
+        const d = NB8[(crand() * NB8.length) | 0];
+        if (hostileClaim(x + d[0], y + d[1], idx)) { placed = true; cur++; }
+      }
+      if (!placed) { const p = f.indexOf(ci); if (p >= 0) f.splice(p, 1); }
+    }
+  }
+  function spawnHostiles() {
+    HOSTILES.length = 0; BATTLES.length = 0; hoFrontier = [];
+    if (!hoCells) return;
+    hoCells.fill(0); hoOwner.fill(-1);
+    // Candidate ground: land cells not sitting on top of a city. Score by
+    // distance from the nearest city, then greedily pick the most isolated spots
+    // so the strongholds scatter across the island instead of clustering.
+    const pool = [];
+    for (let y = 10; y < IH - 10; y += 3) for (let x = 10; x < IW - 10; x += 3) {
+      if (!landAt(x, y)) continue;
+      let onCity = false;
+      for (const r of REGIONS) if (Math.abs(r.px - x) < 26 && Math.abs(r.py - y) < 22) { onCity = true; break; }
+      if (onCity) continue;
+      let fd = 1e9;
+      for (const r of REGIONS) fd = Math.min(fd, Math.hypot(r.px - x, r.py - y));
+      pool.push({ x, y, fd });
+    }
+    if (!pool.length) return;
+    const chosen = [];
+    for (let n = 0; n < 3; n++) {
+      let best = null, bestScore = -1e9;
+      for (const c of pool) {
+        let score = c.fd;
+        for (const ch of chosen) score = Math.min(score, Math.hypot(ch.x - c.x, ch.y - c.y) * 1.5);
+        score += crand() * 0.01;
+        if (score > bestScore) { bestScore = score; best = c; }
+      }
+      if (!best) break;
+      chosen.push(best);
+    }
+    for (let i = 0; i < chosen.length; i++) {
+      const c = chosen[i];
+      const h = { px: c.x, py: c.y, dev: 0, grow: 0, alive: true,
+                  name: HOSTILE_NAMES[i % HOSTILE_NAMES.length] };
+      HOSTILES.push(h); hoFrontier[i] = [];
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) hostileClaim(c.x + dx, c.y + dy, i);
+      hostileGrow(h, 6);
+    }
+    cityDirty = true;
+  }
+  function nearestOwnedRegion(h) {
+    let best = null, bd = 1e9;
+    for (let i = 0; i < REGIONS.length; i++) if (REGIONS[i].owned) {
+      const r = REGIONS[i], d = Math.hypot(r.px - h.px, r.py - h.py);
+      if (d < bd) { bd = d; best = i; }
+    }
+    return best;   // null until you hold a city: no front to lose yet
+  }
+  function battleForHostile(i) { for (let k = 0; k < BATTLES.length; k++) if (BATTLES[k].hi === i) return k; return -1; }
+  function spawnBattleFor(h, regionIdx) {
+    const hi = HOSTILES.indexOf(h), r = REGIONS[regionIdx];
+    if (!r) return;
+    BATTLES.push({ hi, region: regionIdx, x: Math.round((h.px + r.px) / 2), y: Math.round((h.py + r.py) / 2),
+                   ttl: 3, ttlMax: 3, dev: h.dev, name: h.name + ' FRONT' });
+    state.banner = 'BATTLE // ' + r.name; state.bannerCol = '#ff8a6a'; state.bannerT = 3;
+  }
+  function growHostilesAfterRound() {
+    if (!HOSTILES.length) return;
+    for (let i = 0; i < HOSTILES.length; i++) {
+      const h = HOSTILES[i]; if (!h.alive) continue;
+      h.grow += 1 + h.dev;
+      if (h.grow >= 2 + h.dev && h.dev < 3) { h.dev++; h.grow = 0; hostileGrow(h, 8 + h.dev * 6); }
+      else hostileGrow(h, 3);
+    }
+    for (let i = 0; i < HOSTILES.length; i++) {
+      const h = HOSTILES[i]; if (!h.alive) continue;
+      if (battleForHostile(i) >= 0) continue;
+      if (h.dev < 1) continue;
+      const near = nearestOwnedRegion(h);
+      if (near !== null) spawnBattleFor(h, near);
+    }
+    cityDirty = true;
+  }
+  function tickBattles() {
+    for (let i = BATTLES.length - 1; i >= 0; i--) {
+      const b = BATTLES[i];
+      b.ttl--;
+      if (b.ttl > 0) continue;
+      const h = HOSTILES[b.hi], r = REGIONS[b.region];
+      if (h && h.alive) { h.dev = Math.min(3, h.dev + 1); h.grow = 0; hostileGrow(h, 10); }
+      if (r && r.owned) {
+        if (r.dev > 0) r.dev--;
+        else { r.owned = false; r.structs.length = 0; for (let k = BASE.length - 1; k >= 0; k--) if (BASE[k].region === b.region) BASE.splice(k, 1); }
+      }
+      state.banner = 'FRONT LOST // ' + (r ? r.name : '?'); state.bannerCol = '#ff6b5a'; state.bannerT = 3;
+      BATTLES.splice(i, 1);
+    }
+    if (state.battle >= BATTLES.length) state.battle = -1;
+    cityDirty = true;
+  }
+  function resolveBattleWon(i) {
+    const b = BATTLES[i]; if (!b) return;
+    const h = HOSTILES[b.hi];
+    if (h) {
+      h.dev = Math.max(0, h.dev - 1); h.grow = 0;
+      if (h.dev === 0) {
+        h.alive = false;
+        for (let k = 0; k < hoOwner.length; k++) if (hoOwner[k] === b.hi) { hoCells[k] = 0; hoOwner[k] = -1; }
+      }
+    }
+    state.scrap += 40 + (b.dev || 0) * 20;
+    state.banner = (h && !h.alive) ? (h.name + ' DESTROYED') : ((h ? h.name : 'BASE') + ' PUSHED BACK');
+    state.bannerCol = '#8fffa8'; state.bannerT = 3;
+    BATTLES.splice(i, 1); state.battle = -1;
+    cityDirty = true;
+  }
+  function selectBattle(i) {
+    const b = BATTLES[i]; if (!b) return;
+    state.battle = (state.battle === i) ? -1 : i;
+    if (state.battle >= 0) state.region = b.region;
+  }
+
   // ---- city growth ----
   // owning a region plants a settlement; each development level raises the
   // ceiling on how far the sprawl can creep. growth is an "eden" expansion --
@@ -549,6 +706,20 @@
         d[o+3] = 255;
         continue;
       }
+      if (hoCells && hoOwner[i] >= 0 && !urban[i]) {   // hostile territory: red sprawl
+        let hb = 0;
+        for (const [dx, dy] of NB8) if (inb(x + dx, y + dy) && hoOwner[(y + dy) * IW + x + dx] >= 0) hb++;
+        const hh = ihash(x * 13 + 7, y * 17 + 9);
+        let HR, HG, HB2;
+        if (hb >= 6) { HR = 122; HG = 34; HB2 = 30; }
+        else if (hb >= 4) { HR = 154; HG = 54; HB2 = 42; }
+        else { HR = 176; HG = 78; HB2 = 56; }
+        const dn = (hh - 0.5) * 20; HR += dn; HG += dn * 0.5; HB2 += dn * 0.5;
+        if (hb >= 5 && ((x % 4 === 0) !== (y % 4 === 0))) { HR = 72; HG = 44; HB2 = 40; }
+        else if (hb >= 5 && hh > 0.82) { HR = 255; HG = 150; HB2 = 70; }
+        d[o] = HR; d[o+1] = HG; d[o+2] = HB2; d[o+3] = 255;
+        continue;
+      }
       if (!urban[i]) continue;
       let nb = 0;
       for (const [dx, dy] of NB8) if (inb(x + dx, y + dy) && urban[(y + dy) * IW + x + dx]) nb++;
@@ -650,6 +821,17 @@
       state.banner = ''; state.bannerT = 0;
     } else {
       growCitiesAfterRound();
+      if (state.mode === 'battle' && state.battle >= 0 && BATTLES[state.battle]) {
+        BATTLES.splice(state.battle, 1); state.battle = -1;   // failing the assault advances the front
+        for (const f of BATTLES) f.ttl--;
+        for (let k = BATTLES.length - 1; k >= 0; k--) if (BATTLES[k].ttl <= 0) {
+          const h = HOSTILES[BATTLES[k].hi]; if (h && h.alive) { h.dev = Math.min(3, h.dev + 1); h.grow = 0; hostileGrow(h, 10); }
+          BATTLES.splice(k, 1);
+        }
+      }
+      state.mode = 'fly';
+      growHostilesAfterRound();
+      tickBattles();
       state.phase = 'build'; P.hp = 100;
       state.banner = paid > 0 ? state.banner : 'SHOT DOWN \u2014 EXTRACTED';
       state.bannerCol = paid > 0 ? '#8fffa8' : '#ff9a6a';
@@ -675,20 +857,32 @@
       for (let k = 0; k < 2; k++) addCityBuilding(state.region, 'house');
     }
     growCitiesAfterRound();
+    if (state.mode === 'battle' && state.battle >= 0 && BATTLES[state.battle]) resolveBattleWon(state.battle);
+    state.mode = 'fly';
     const paid = payYields();
     if (captured) {
       state.banner = rg.name + ' SECURED';
       state.bannerCol = '#8fffa8'; if (!(paid > 0)) state.bannerT = 2.8;
     }
     buildMsg(captured ? (rg.name + ' secured') : ('wave ' + state.wave + ' cleared'));
-    if (REGIONS.length && REGIONS.every(r => r.owned)) { state.over = true; state.win = true; saveBest(); }
+    // hold every region -> campaign won before the enemy gets its counter-punch
+    if (REGIONS.length && REGIONS.every(r => r.owned)) { state.over = true; state.win = true; saveBest(); return; }
+    growHostilesAfterRound();   // otherwise the enemy keeps developing and pushing fronts
+    tickBattles();
   }
   function startWave() {
     state.wave++; state.phase = 'fly'; state.waveTimer = 0;
     P.bombs = Math.min(10, P.bombs + 2 + countBase('depot'));
     state.buildMsg = ''; state.buildMsgT = 0;
     const rg = REGIONS[state.region];
-    for (let i = 0; i < 3 + state.wave + (rg ? rg.threat - 1 : 0); i++) spawnEnemy(P.x + 700 + i * 180 + Math.random() * 120);
+    let extra = 0;
+    if (state.battle >= 0 && BATTLES[state.battle]) {   // sortie into a contested front
+      const b = BATTLES[state.battle];
+      state.mode = 'battle';
+      extra = 3 + (b.dev || 0) * 2;
+      state.banner = 'ASSAULT // ' + b.name; state.bannerCol = '#ff8a6a'; state.bannerT = 3;
+    } else state.mode = 'fly';
+    for (let i = 0; i < 3 + state.wave + (rg ? rg.threat - 1 : 0) + extra; i++) spawnEnemy(P.x + 700 + i * 180 + Math.random() * 120);
   }
 
   // deterministic per-x RNG so clusters are stable if we ever revisit them
@@ -1163,9 +1357,14 @@
     const db = { x: VW - 244, y: 200, w: 212, h: 30 };
     if (x >= db.x && x < db.x + db.w && y >= db.y && y < db.y + db.h) { developRegion(); return; }
     const M = mapRect();
+    // battles sit between nodes; check them first so they win the overlap
+    for (let i = 0; i < BATTLES.length; i++) {
+      const b = BATTLES[i], p = { x: M.ox + b.x * M.s, y: M.oy + b.y * M.s };
+      if (x > p.x - 16 && x < p.x + 16 && y > p.y - 16 && y < p.y + 16) { selectBattle(i); return; }
+    }
     for (let i = 0; i < REGIONS.length; i++) {
       const p = regionScreen(REGIONS[i], M.ox, M.oy, M.s);
-      if (x > p.x - 22 && x < p.x + 22 && y > p.y - 22 && y < p.y + 22) { state.region = i; return; }
+      if (x > p.x - 22 && x < p.x + 22 && y > p.y - 22 && y < p.y + 22) { state.region = i; state.battle = -1; return; }
     }
   }
   function drawBuild() {
@@ -1187,6 +1386,9 @@
     ctx.fillText('WAVE ' + state.wave, VW - 24, 48);
     ctx.fillStyle = totalIncome() > 0 ? '#8fffa8' : '#4d5a6e';
     ctx.fillText('INCOME +' + totalIncome() + '/round', VW - 24, 68);
+    const hAlive = HOSTILES.filter(h => h.alive).length;
+    ctx.fillStyle = hAlive ? '#ff8a72' : '#4d5a6e';
+    ctx.fillText('HOSTILES ' + hAlive + '  \u00b7  FRONTS ' + BATTLES.length, VW - 24, 88);
     ctx.textAlign = 'left';
     // region nodes
     for (let i = 0; i < REGIONS.length; i++) {
@@ -1211,6 +1413,52 @@
       }
       if (sel || r.owned) { ctx.fillStyle = sel ? '#ffe6bf' : '#9fe6b4'; ctx.font = '600 11px ui-monospace,Menlo,monospace'; ctx.fillText(r.name, p.x, p.y + 36); }
       ctx.textAlign = 'left';
+    }
+    // hostile strongholds, and the fronts they push toward your cities
+    for (let i = 0; i < HOSTILES.length; i++) {
+      const h = HOSTILES[i]; if (!h.alive) continue;
+      const p = { x: M.ox + h.px * M.s, y: M.oy + h.py * M.s };
+      ctx.fillStyle = 'rgba(26,6,8,0.82)'; ctx.fillRect(p.x - 11, p.y - 11, 22, 22);
+      ctx.strokeStyle = '#ff6b5a'; ctx.lineWidth = 2; ctx.strokeRect(p.x - 10.5, p.y - 10.5, 21, 21);
+      ctx.textAlign = 'center'; ctx.font = '700 13px ui-monospace,Menlo,monospace'; ctx.fillStyle = '#ff8a72';
+      ctx.fillText('\u2620', p.x, p.y + 5);
+      for (let k = 0; k < 3; k++) {   // development pips
+        ctx.fillStyle = k < h.dev ? '#ff6b5a' : 'rgba(255,107,90,0.22)';
+        ctx.fillRect(p.x - 9 + k * 7, p.y - 19, 5, 5);
+      }
+      ctx.fillStyle = '#ff9a8a'; ctx.font = '600 10px ui-monospace,Menlo,monospace';
+      ctx.fillText(h.name, p.x, p.y + 26);
+      ctx.textAlign = 'left';
+    }
+    for (let i = 0; i < BATTLES.length; i++) {
+      const b = BATTLES[i];
+      const p = { x: M.ox + b.x * M.s, y: M.oy + b.y * M.s };
+      const h = HOSTILES[b.hi], r = REGIONS[b.region];
+      // draw the contested corridor: hostile -> front -> city
+      if (h && h.alive) {
+        const hp = { x: M.ox + h.px * M.s, y: M.oy + h.py * M.s };
+        ctx.strokeStyle = 'rgba(255,90,60,0.5)'; ctx.lineWidth = 2; ctx.setLineDash([4, 4]);
+        ctx.beginPath(); ctx.moveTo(hp.x, hp.y); ctx.lineTo(p.x, p.y); ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      if (r) {
+        const rp = regionScreen(r, M.ox, M.oy, M.s);
+        ctx.strokeStyle = 'rgba(255,210,122,0.35)'; ctx.lineWidth = 2; ctx.setLineDash([4, 4]);
+        ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(rp.x, rp.y); ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      const sel = state.battle === i, pulse = 0.5 + 0.5 * Math.sin(state.t * 6);
+      ctx.globalAlpha = 0.28 + 0.42 * pulse; ctx.fillStyle = '#ff3b2f';
+      ctx.beginPath(); ctx.arc(p.x, p.y, 12 + pulse * 6, 0, 6.283); ctx.fill(); ctx.globalAlpha = 1;
+      ctx.strokeStyle = sel ? '#ffe6bf' : '#ff7a5c'; ctx.lineWidth = sel ? 3 : 2;
+      ctx.beginPath(); ctx.arc(p.x, p.y, 11, 0, 6.283); ctx.stroke();
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.beginPath();
+      ctx.moveTo(p.x - 5, p.y - 5); ctx.lineTo(p.x + 5, p.y + 5);
+      ctx.moveTo(p.x + 5, p.y - 5); ctx.lineTo(p.x - 5, p.y + 5); ctx.stroke();
+      for (let k = 0; k < b.ttlMax; k++) {   // turns left before the front falls
+        ctx.fillStyle = k < b.ttl ? '#ffd27a' : 'rgba(255,210,122,0.25)';
+        ctx.fillRect(p.x - 8 + k * 6, p.y + 15, 4, 5);
+      }
     }
     // intel panel
     const r = REGIONS[state.region];
@@ -1273,7 +1521,8 @@
     ctx.fillStyle = 'rgba(120,220,140,0.18)'; ctx.fillRect(lb.x, lb.y, lb.w, lb.h);
     ctx.strokeStyle = '#7fdc8c'; ctx.lineWidth = 2; ctx.strokeRect(lb.x + 0.5, lb.y + 0.5, lb.w - 1, lb.h - 1);
     ctx.fillStyle = '#b8f0c4'; ctx.font = '700 13px ui-monospace,Menlo,monospace'; ctx.textAlign = 'center';
-    ctx.fillText('LAUNCH  \u25b6  ' + (r ? r.name : '') + '  [space]', lb.x + lb.w / 2, lb.y + 23);
+    const bs = state.battle >= 0 ? BATTLES[state.battle] : null;
+    ctx.fillText((bs ? 'ASSAULT  \u25b6  ' : 'LAUNCH  \u25b6  ') + (bs ? bs.name : (r ? r.name : '')) + '  [space]', lb.x + lb.w / 2, lb.y + 23);
     if (state.bannerT > 0) {
       ctx.globalAlpha = Math.min(1, state.bannerT * 1.5); ctx.fillStyle = state.bannerCol;
       ctx.font = '700 17px ui-monospace,Menlo,monospace'; ctx.textAlign = 'center';
@@ -1580,5 +1829,7 @@
     syncCity, cityStep, rebuildRoads, renderCity, growCitiesAfterRound, addCityBuilding, cityBuildingCount,
     get cityBuildings(){return cityBuildings;},
     get urban(){return urban;}, get road(){return road;}, get landMask(){return landMask;},
-    get mapCanvas(){return mapCanvas;}, get cityCanvas(){return mapCanvas;}, get cityDirty(){return cityDirty;} };
+    get mapCanvas(){return mapCanvas;}, get cityCanvas(){return mapCanvas;}, get cityDirty(){return cityDirty;},
+    HOSTILES, BATTLES, spawnHostiles, growHostilesAfterRound, tickBattles, resolveBattleWon, selectBattle, spawnBattleFor,
+    get hoCells(){return hoCells;}, get hoOwner(){return hoOwner;}, battleForHostile, nearestOwnedRegion };
 })();
