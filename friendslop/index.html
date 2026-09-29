@@ -40,15 +40,38 @@
 <section id="play"><div class="wrap">
   <div class="sec-kicker">// live simulation</div>
   <h2>The Cube, running in your browser</h2>
-  <p class="muted">The same C++ simulation, compiled to WebAssembly. It plays itself — an AI crew runs a
-  full shift: navigating, reading room codes, disarming traps, reviving the fallen, and trying to outlast
-  the lattice when it slides. Watch, or take the controls.</p>
+  <p class="muted"><b>▶ PLAY</b> drops you into the Cube in first person: WASD to move, mouse to look,
+  <b>E</b> to use/revive. Your AI crew comes with you — MATH reads the room ahead, ENGINEER defuses it,
+  COP forces the welds, and they'll pick you up if you go down. Or hit <b>Watch AI</b> and let the crew
+  run a shift on its own.</p>
 
   <div class="play">
     <div>
       <div class="stage">
         <canvas id="cube" width="640" height="360"></canvas>
         <div class="scan"></div>
+        <div class="playoverlay" id="overlay">
+          <div class="pcard">
+            <div class="ptitle">CLICK TO PLAY</div>
+            <div class="pkeys">WASD move &nbsp;·&nbsp; mouse look &nbsp;·&nbsp; Space jump &nbsp;·&nbsp; E use/revive &nbsp;·&nbsp; Esc release</div>
+          </div>
+        </div>
+        <div class="hint" id="hint"></div>
+      </div>
+      <div class="stagebar">
+        <button class="btn ctl primary" data-mode="play">▶ PLAY</button>
+        <button class="btn ctl" data-mode="watch">Watch AI</button>
+        <span class="spacer"></span>
+        <span class="field">you&nbsp;<b id="playClass">ENG</b></span>
+      </div>
+      <div class="stagebar" id="classRow" style="border-top:0">
+        <span class="field">class</span>
+        <button class="btn ctl" data-class="1">ENG</button>
+        <button class="btn ctl" data-class="0">MATH</button>
+        <button class="btn ctl" data-class="2">ARCH</button>
+        <button class="btn ctl" data-class="3">COP</button>
+        <button class="btn ctl" data-class="5">SCT</button>
+        <button class="btn ctl" data-class="4">SAV</button>
       </div>
       <div class="stagebar">
         <span class="badge live" id="status">BOOT</span>
@@ -60,11 +83,11 @@
       <div class="stagebar" style="border-top:0">
         <label class="field"><input type="checkbox" id="noshift">&nbsp;freeze the Cube</label>
         <span class="spacer"></span>
-        <span class="field">cam</span>
+        <span class="field" id="camRow"><span>cam</span>
         <button class="btn ctl primary" data-follow="0">1</button>
         <button class="btn ctl" data-follow="1">2</button>
         <button class="btn ctl" data-follow="2">3</button>
-        <button class="btn ctl" data-follow="3">4</button>
+        <button class="btn ctl" data-follow="3">4</button></span>
         <span class="spacer"></span>
         <button class="btn ctl" data-speed="1">1×</button>
         <button class="btn ctl" data-speed="2">2×</button>
