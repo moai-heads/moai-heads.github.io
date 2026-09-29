@@ -18,7 +18,9 @@
     keys[e.code] = true;
     if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code)) e.preventDefault();
     if (state.phase === 'build') {
-      if (e.code === 'Digit1' || e.code === 'Digit2' || e.code === 'Digit3' || e.code === 'Digit4') state.buildSel = (+e.code.slice(5)) - 1;
+      if (e.code === 'Digit1' || e.code === 'Digit2' || e.code === 'Digit3' || e.code === 'Digit4') buildAtRegion(DEF_ORDER[(+e.code.slice(5)) - 1]);
+      if (e.code === 'ArrowLeft' && REGIONS.length) state.region = (state.region + REGIONS.length - 1) % REGIONS.length;
+      if (e.code === 'ArrowRight' && REGIONS.length) state.region = (state.region + 1) % REGIONS.length;
       if (e.code === 'Space' || e.code === 'Enter' || e.code === 'NumpadEnter') { startWave(); e.preventDefault(); }
     }
     if (e.code === 'KeyR' && state.over) reset();
@@ -55,20 +57,22 @@
 
   // ---- state ----
   const state = {
-    over: false, win: false, score: 0, wave: 1, t: 0,
+    over: false, win: false, score: 0, wave: 0, t: 0,
     warCrimes: 0, wcFlash: 0,
-    phase: 'fly', scrap: 120, buildSel: 0, buildMsg: '', buildMsgT: 0, turretCd: 0,
+    phase: 'build', region: 0, scrap: 120, airframes: 3, banner: '', bannerT: 0, bannerCol: '#8fffa8',
+    buildMsg: '', buildMsgT: 0, turretCd: 0,
     spawnCd: 1.2, waveTimer: 0, shake: 0, best: +(localStorage.getItem('dc_best') || 0)
   };
 
   const P = {};
   function reset() {
-    state.over = false; state.score = 0; state.wave = 1; state.t = 0;
+    state.over = false; state.score = 0; state.wave = 0; state.t = 0;
     state.warCrimes = 0; state.wcFlash = 0;
     state.spawnCd = 1.2; state.waveTimer = 0; state.shake = 0;
-    state.phase = 'fly'; state.scrap = 120; state.buildSel = 0;
+    state.phase = 'build'; state.scrap = 120; state.region = 0; state.airframes = 3;
+    state.banner = ''; state.bannerT = 0;
     state.buildMsg = ''; state.buildMsgT = 0; state.turretCd = 0;
-    BASE.length = 0;
+    BASE.length = 0; REGIONS.length = 0; islCanvas = null; mapData = null; mapCanvas = null;
     P.x = 260; P.y = 250; P.vx = 0; P.vy = 0;
     P.hp = 100; P.heat = 0; P.fireCd = 0; P.rotor = 0; P.hitFlash = 0;
     P.bombs = 5; P.bombCd = 0; P.bombRegen = 0;
@@ -95,8 +99,421 @@
     depot:  { name: 'DEPOT',  cost: 20, col: '#ffd27a', desc: '+1 bomb / wave, faster gun cooling' },
   };
   const DEF_ORDER = ['turret', 'bunker', 'repair', 'depot'];
-  const GRID_W = 12, GRID_H = 7, CELL = 54;
-  const GRID_X = (VW - GRID_W * CELL) / 2, GRID_Y = 96;
+
+  // ---- campaign island: a procedural per-pixel map, rendered low-res then
+  // nearest-neighbour upscaled for the pixel-art look (canvas2d has no shader
+  // stage, so this is the equivalent: one colour-classification pass per pixel).
+  // Double source resolution but keep the same 640x360 display footprint.
+  // At 2x nearest-neighbour, terrain features read as pixel-art sprites.
+  const IW = 320, IH = 180;
+  const ICOL = [[26,48,84],[40,86,132],[220,196,134],[120,164,88],[74,116,62],[132,120,106],[230,232,238]];
+  const REGION_NAMES = ['SALT FLAT','DUNE BASIN','THE RIDGE','OASIS','OLD HARBOR','BLACK MESA'];
+  const REGION_TERRAIN = ['coastal','desert','ridge','oasis','harbor','mesa'];
+  let islCanvas = null;
+  // the campaign map is a SINGLE pixel buffer: terrain with roads and the
+  // growing city baked straight into it, so what you develop IS the map.
+  let mapData = null, mapCanvas = null;
+  function ihash(x, y) {
+    let n = (x * 374761393 + y * 668265263) | 0;
+    n = Math.imul(n ^ (n >>> 13), 1274126177);
+    return ((n ^ (n >>> 16)) >>> 0) / 4294967296;
+  }
+  function sm(t) { return t * t * (3 - 2 * t); }
+  function vnoise(x, y) {
+    const xi = Math.floor(x), yi = Math.floor(y), xf = x - xi, yf = y - yi;
+    const a = ihash(xi, yi), b = ihash(xi + 1, yi), c = ihash(xi, yi + 1), d = ihash(xi + 1, yi + 1);
+    const u = sm(xf), v = sm(yf);
+    return a * (1 - u) * (1 - v) + b * u * (1 - v) + c * (1 - u) * v + d * u * v;
+  }
+  function fbm(x, y) { let s = 0, a = 0.5, f = 1; for (let i = 0; i < 5; i++) { s += a * vnoise(x * f, y * f); f *= 2; a *= 0.5; } return s; }
+  function islandH(u, v, seed) {
+    const dx = (u - 0.5) * 2, dy = (v - 0.5) * 2;
+    const d = Math.sqrt(dx * dx + dy * dy * 1.25);
+    let edge = Math.max(0, Math.min(1, (1 - d) * 1.4));
+    const n = fbm(u * 5 + seed, v * 5 + seed * 1.7);
+    let h = edge * 0.72 + (n - 0.5) * 0.6 + 0.28;
+    h += (fbm(u * 13 + seed * 3, v * 13 + seed) - 0.5) * 0.16;
+    return h;
+  }
+  function buildIsland() {
+    const m = (location.search + location.hash).match(/seed=([-\d.]+)/);
+    const sp = m ? parseFloat(m[1]) : NaN;
+    const seed = isFinite(sp) ? sp : ((typeof window.ISLAND_SEED === 'number') ? window.ISLAND_SEED : Math.random() * 100);
+    const c = document.createElement('canvas'); c.width = IW; c.height = IH;
+    const cx = c.getContext('2d');
+    const img = cx.createImageData(IW, IH), dat = img.data;
+    const count = IW * IH, heights = new Float32Array(count);
+    REGIONS.length = 0;
+    const cand = [];
+
+    // Bake a fine height field, hillshade and tile-scale terrain texture.
+    for (let y = 0; y < IH; y++) for (let x = 0; x < IW; x++) {
+      const i = y * IW + x, h = islandH(x / IW, y / IH, seed);
+      heights[i] = h;
+      let ci;
+      if (h < 0.34) ci = 0; else if (h < 0.42) ci = 1; else if (h < 0.47) ci = 2;
+      else if (h < 0.58) ci = 3; else if (h < 0.68) ci = 4; else if (h < 0.80) ci = 5; else ci = 6;
+      landMask[i] = (h >= 0.42 && h < 0.96) ? 1 : 0;
+      const o = i * 4, base = ICOL[ci];
+      const grain = (ihash(x * 3 + 1, y * 5 + 2) - 0.5) * 13;
+      const patch = (vnoise(x * 0.075 + seed * 2.1, y * 0.075 + seed * 1.3) - 0.5) * 11;
+      const left = x ? heights[i - 1] : h, up = y ? heights[i - IW] : h;
+      const shade = 1 + (left - h) * 4.2 + (up - h) * 3.0;
+      let detail = grain + patch;
+      if (ci <= 1) {
+        const wave = Math.sin(x * 0.18 + y * 0.12 + vnoise(x * 0.035, y * 0.035 + seed) * 4.5);
+        detail += wave > 0.78 ? 5 : 0;
+      } else if (ci === 2) detail += Math.sin(x * 0.31 + y * 0.10 + patch * 0.08) * 4;
+      else if (ci === 5) detail += Math.sin(x * 0.43 + y * 0.20 + patch * 0.1) * 3;
+      else if (ci === 6 && ihash(x + 1701, y + 5309) > 0.93) detail += 12;
+      const light = ci <= 1 ? 1 : Math.max(0.78, Math.min(1.18, shade));
+      dat[o] = Math.max(0, Math.min(255, base[0] * light + detail));
+      dat[o + 1] = Math.max(0, Math.min(255, base[1] * light + detail));
+      dat[o + 2] = Math.max(0, Math.min(255, base[2] * light + detail));
+      dat[o + 3] = 255;
+      if (h >= 0.47 && h < 0.78) cand.push({ x, y });
+    }
+
+    function paint(x, y, rgb) {
+      if (x < 0 || y < 0 || x >= IW || y >= IH) return;
+      const o = (y * IW + x) * 4;
+      dat[o] = rgb[0]; dat[o + 1] = rgb[1]; dat[o + 2] = rgb[2]; dat[o + 3] = 255;
+    }
+
+    // Surf scallops make the coastline read clearly at 2x zoom.
+    for (let y = 1; y < IH - 1; y++) for (let x = 1; x < IW - 1; x++) {
+      const i = y * IW + x, h = heights[i];
+      if (h < 0.32 || h >= 0.42) continue;
+      let shore = false;
+      for (const [dx, dy] of NB8) if (landMask[(y + dy) * IW + x + dx]) { shore = true; break; }
+      if (shore) paint(x, y, ihash(x * 7 + 91, y * 11 + 37) > 0.60 ? [105,169,156] : [65,130,151]);
+    }
+
+    // Two seeded downhill streams from the high interior to the sea. A
+    // breadth-first coast distance guarantees each path reaches the shoreline.
+    const coastDist = new Int16Array(count); coastDist.fill(32767);
+    const queue = new Int32Array(count); let qh = 0, qt = 0;
+    for (let i = 0; i < count; i++) if (heights[i] < 0.42) { coastDist[i] = 0; queue[qt++] = i; }
+    const N4 = [[1,0],[-1,0],[0,1],[0,-1]];
+    while (qh < qt) {
+      const i = queue[qh++], x = i % IW, y = (i / IW) | 0, nd = coastDist[i] + 1;
+      for (const [dx, dy] of N4) {
+        const nx = x + dx, ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= IW || ny >= IH) continue;
+        const ni = ny * IW + nx;
+        if (coastDist[ni] > nd) { coastDist[ni] = nd; queue[qt++] = ni; }
+      }
+    }
+    const river = new Uint8Array(count), bank = new Uint8Array(count), riverSeeds = [];
+    for (let stream = 0; stream < 2; stream++) {
+      let start = -1, best = -1;
+      for (let i = 0; i < count; i++) {
+        const h = heights[i], cd = coastDist[i];
+        if (h < 0.58 || h > 0.82 || cd < 10 || cd > 52) continue;
+        let separated = true;
+        for (const old of riverSeeds) if (Math.abs((old % IW) - (i % IW)) < 22 && Math.abs(((old / IW) | 0) - ((i / IW) | 0)) < 18) { separated = false; break; }
+        if (!separated) continue;
+        const score = h * 0.55 + Math.min(cd, 36) * 0.002 + ihash(i + stream * 1931, 887) * 0.14;
+        if (score > best) { best = score; start = i; }
+      }
+      if (start < 0) continue;
+      riverSeeds.push(start);
+      let i = start;
+      for (let step = 0; step < 320 && coastDist[i] > 0; step++) {
+        river[i] = 1;
+        const x = i % IW, y = (i / IW) | 0;
+        for (const [dx, dy] of N4) {
+          const nx = x + dx, ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= IW || ny >= IH) continue;
+          const ni = ny * IW + nx;
+          if (landMask[ni] && !river[ni]) bank[ni] = 1;
+        }
+        let next = -1, score = Infinity;
+        for (const [dx, dy] of NB8) {
+          const nx = x + dx, ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= IW || ny >= IH) continue;
+          const ni = ny * IW + nx;
+          if (coastDist[ni] >= coastDist[i] || river[ni]) continue;
+          const s = heights[ni] + ihash(nx * 13 + stream * 97, ny * 17 + 211) * 0.035;
+          if (s < score) { score = s; next = ni; }
+        }
+        if (next < 0) break;
+        i = next;
+      }
+    }
+    for (let i = 0; i < count; i++) {
+      if (bank[i] && !river[i]) paint(i % IW, (i / IW) | 0, [177,165,123]);
+      if (river[i]) paint(i % IW, (i / IW) | 0, ihash(i + 703, 119) > 0.68 ? [90,161,176] : [50,119,151]);
+    }
+
+    // Tiny clustered hardwoods: dark pixel-art canopy, bright leaves, one-pixel trunk.
+    const treeShape = [
+      [0,-2,2], [-1,-1,1],[0,-1,0],[1,-1,2],
+      [-2,0,2],[-1,0,0],[0,0,0],[1,0,1],[2,0,2],
+      [-2,1,2],[-1,1,0],[0,1,1],[1,1,0],[2,1,2],
+      [-1,2,2],[0,2,3],[1,2,2]
+    ];
+    const treePal = [
+      [[52,112,51],[35,75,44],[113,160,67],[111,83,54]],
+      [[61,126,56],[39,83,47],[133,173,72],[116,88,56]],
+      [[48,101,58],[32,69,49],[100,149,74],[109,82,57]]
+    ];
+    for (let gy = 5; gy < IH - 4; gy += 5) for (let gx = 5; gx < IW - 4; gx += 5) {
+      const j = gy * IW + gx;
+      if (heights[j] < 0.52 || heights[j] > 0.75) continue;
+      const forestness = vnoise(gx * 0.055 + seed * 2.7, gy * 0.055 + seed * 1.9);
+      if (forestness < 0.43 || ihash(gx + 612, gy + 143) < 0.22) continue;
+      const tx = gx + ((ihash(gx + 201, gy + 379) * 3) | 0) - 1;
+      const ty = gy + ((ihash(gx + 503, gy + 887) * 3) | 0) - 1;
+      const pal = treePal[(ihash(gx + 71, gy + 31) * treePal.length) | 0];
+      for (const [dx, dy, c] of treeShape) {
+        const x = tx + dx, y = ty + dy;
+        if (x < 0 || y < 0 || x >= IW || y >= IH) continue;
+        const k = y * IW + x;
+        if (!landMask[k] || river[k] || bank[k]) continue;
+        paint(x, y, pal[c]);
+      }
+    }
+
+    // Sparse rocky tors and snow caps break up high ground into landmarks.
+    for (let gy = 8; gy < IH - 7; gy += 9) for (let gx = 8; gx < IW - 7; gx += 10) {
+      const cxp = gx + ((ihash(gx + 77, gy + 91) * 5) | 0) - 2;
+      const cyp = gy + ((ihash(gx + 31, gy + 53) * 5) | 0) - 2;
+      const ci = cyp * IW + cxp;
+      if (heights[ci] < 0.67 || heights[ci] > 0.88 || ihash(gx + 991, gy + 727) < 0.44) continue;
+      for (let dy = -3; dy <= 2; dy++) {
+        const half = dy <= -2 ? dy + 3 : (dy === -1 ? 2 : (dy === 0 ? 3 : 2));
+        for (let dx = -half; dx <= half; dx++) {
+          const x = cxp + dx, y = cyp + dy;
+          if (x < 0 || y < 0 || x >= IW || y >= IH) continue;
+          const k = y * IW + x;
+          if (!landMask[k] || river[k] || bank[k]) continue;
+          let col;
+          if (dy <= -2 && Math.abs(dx) <= 1) col = heights[k] > 0.80 ? [228,226,212] : [184,178,151];
+          else if (dx + dy < 0) col = [157,155,139];
+          else col = [91,98,91];
+          if (heights[k] > 0.80 && ihash(x + 661, y + 71) > 0.44) col = [222,226,224];
+          paint(x, y, col);
+        }
+      }
+    }
+
+    cx.putImageData(img, 0, 0);
+    islCanvas = c;
+    mapData = new Uint8ClampedArray(img.data);
+    mapCanvas = null; cityDirty = true;
+    for (let t = 0; t < 6000 && REGIONS.length < 6; t++) {
+      const cnd = cand[(Math.random() * cand.length) | 0]; if (!cnd) break;
+      let ok = true;
+      for (const r of REGIONS) if (Math.abs(r.px - cnd.x) < 52 && Math.abs(r.py - cnd.y) < 40) { ok = false; break; }
+      if (!ok) continue;
+      const i = REGIONS.length;
+      REGIONS.push({ px: cnd.x, py: cnd.y, name: REGION_NAMES[i % REGION_NAMES.length],
+                     terrain: REGION_TERRAIN[i % REGION_TERRAIN.length], threat: 1 + i,
+                     owned: false, dev: 0, structs: [] });
+    }
+    REGIONS.sort((a, b) => a.px - b.px);
+    if (state.region >= REGIONS.length) state.region = 0;
+    // fresh urban fabric for the new island
+    urban = new Uint8Array(IW * IH);
+    urbanOwner = new Int8Array(IW * IH).fill(-1);
+    road = new Uint8Array(IW * IH);
+    urbanCount = REGIONS.map(() => 0);
+    frontier = REGIONS.map(() => []);
+    cityDirty = true; cityAcc = 0; crandState = (seed * 1e6) | 0;
+    for (let i = 0; i < REGIONS.length; i++) if (REGIONS[i].owned) citySeedRegion(i);
+    rebuildRoads();
+  }
+  const REGIONS = [];
+  // ---- city growth ----
+  // owning a region plants a settlement; each development level raises the
+  // ceiling on how far the sprawl can creep. growth is an "eden" expansion --
+  // cells are claimed off a boundary frontier so the blobs stay organic -- and
+  // highways stitch the holdings together so the sprawl runs along the roads.
+  let urban = null, urbanOwner = null, road = null, landMask = new Uint8Array(IW * IH);
+  let cityDirty = true, cityAcc = 0;
+  let urbanCount = [], frontier = [];
+  const CITY_TICK = 0.26;
+  // seeded prng so growth is reproducible for a given island (and for GIF demos)
+  let crandState = 1;
+  function crand() {
+    crandState |= 0; crandState = (crandState + 0x6D2B79F5) | 0;
+    let t = Math.imul(crandState ^ (crandState >>> 15), 1 | crandState);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  }
+  const NB8 = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[-1,-1],[1,-1],[-1,1]];
+  function cityCap(dev) { return (24 + dev * 66) * 4; }
+  function inb(x, y) { return x >= 0 && y >= 0 && x < IW && y < IH; }
+  function landAt(x, y) { return inb(x, y) && landMask[y * IW + x] === 1; }
+  function cityClaim(x, y, idx) {
+    const i = y * IW + x;
+    if (urban[i] || !landAt(x, y)) return false;
+    urban[i] = 1; urbanOwner[i] = idx; urbanCount[idx]++; frontier[idx].push(i);
+    cityDirty = true; return true;
+  }
+  function citySeedRegion(idx) {
+    const r = REGIONS[idx]; if (!r) return;
+    let bx = r.px, by = r.py, found = landAt(bx, by);
+    for (let rad = 1; rad < 12 && !found; rad++)
+      for (let dy = -rad; dy <= rad && !found; dy++)
+        for (let dx = -rad; dx <= rad && !found; dx++)
+          if (landAt(r.px + dx, r.py + dy)) { bx = r.px + dx; by = r.py + dy; found = true; }
+    if (!found) return;
+    cityClaim(bx, by, idx);
+    for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) cityClaim(bx + dx, by + dy, idx);
+  }
+  function cityStep() {
+    let any = false;
+    for (let idx = 0; idx < REGIONS.length; idx++) {
+      const r = REGIONS[idx]; if (!r.owned) continue;
+      const cap = cityCap(r.dev);
+      let tries = 2 * (1 + r.dev);
+      for (let t = 0; t < tries && urbanCount[idx] < cap; t++) {
+        const f = frontier[idx]; if (!f.length) break;
+        const ci = f[(crand() * f.length) | 0];
+        const x = ci % IW, y = (ci / IW) | 0;
+        let placed = false;
+        for (let a = 0; a < 7 && !placed; a++) {
+          const d = NB8[(crand() * NB8.length) | 0];
+          if (cityClaim(x + d[0], y + d[1], idx)) { placed = true; any = true; }
+        }
+        // roads also sprout a little sprawl beside them
+        if (!placed && cityClaim(x + ((crand() * 3) | 0) - 1, y, idx)) { placed = true; any = true; }
+        if (!placed) { const p = f.indexOf(ci); if (p >= 0) f.splice(p, 1); }
+      }
+    }
+    return any;
+  }
+  function rebuildRoads() {
+    road.fill(0);
+    const owned = REGIONS.map((r, i) => i).filter(i => REGIONS[i].owned).sort((a, b) => REGIONS[a].px - REGIONS[b].px);
+    for (let k = 0; k + 1 < owned.length; k++) {
+      let x0 = REGIONS[owned[k]].px, y0 = REGIONS[owned[k]].py;
+      const x1 = REGIONS[owned[k + 1]].px, y1 = REGIONS[owned[k + 1]].py;
+      const dx = Math.abs(x1 - x0), dy = Math.abs(y1 - y0);
+      const sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1; let err = dx - dy;
+      for (let guard = 0; guard < 400; guard++) {
+        if (inb(x0, y0)) road[y0 * IW + x0] = 1;
+        if (x0 === x1 && y0 === y1) break;
+        const e2 = 2 * err;
+        if (e2 > -dy) { err -= dy; x0 += sx; }
+        if (e2 < dx) { err += dx; y0 += sy; }
+      }
+    }
+    cityDirty = true;
+  }
+  function syncCity() { for (let i = 0; i < REGIONS.length; i++) if (REGIONS[i].owned) citySeedRegion(i); rebuildRoads(); }
+  // renderCity bakes roads + city growth INTO the island's pixel buffer and
+  // produces one unified map image. (the old code composited a translucent
+  // overlay on top; this makes the city literally part of the map surface.)
+  function renderCity() {
+    if (!mapCanvas) { mapCanvas = document.createElement('canvas'); mapCanvas.width = IW; mapCanvas.height = IH; }
+    const cc = mapCanvas.getContext('2d');
+    const img = cc.createImageData(IW, IH), d = img.data;
+    if (mapData) d.set(mapData);
+    else for (let i = 0; i < d.length; i += 4) { d[i] = 12; d[i+1] = 20; d[i+2] = 34; d[i+3] = 255; }
+    for (let y = 0; y < IH; y++) for (let x = 0; x < IW; x++) {
+      const i = y * IW + x, o = i * 4;
+      // roads are graded straight into the terrain (asphalt over whatever is there)
+      if (road[i] && !urban[i]) {
+        d[o]   = d[o]   * 0.28 + 52  * 0.72;
+        d[o+1] = d[o+1] * 0.28 + 56  * 0.72;
+        d[o+2] = d[o+2] * 0.28 + 70  * 0.72;
+        d[o+3] = 255;
+        continue;
+      }
+      if (!urban[i]) continue;
+      let nb = 0;
+      for (const [dx, dy] of NB8) if (inb(x + dx, y + dy) && urban[(y + dy) * IW + x + dx]) nb++;
+      const h = ihash(x * 7 + 3, y * 11 + 5);
+      let R, G, B;
+      if (nb >= 6) { R = 188; G = 179; B = 163; }        // dense concrete core
+      else if (nb >= 4) { R = 154; G = 141; B = 122; }    // built-up
+      else {                                              // sprawl edge: fades into terrain
+        const t = 0.55 + (h - 0.5) * 0.14;
+        R = d[o]   * (1 - t) + 132 * t;
+        G = d[o+1] * (1 - t) + 120 * t;
+        B = d[o+2] * (1 - t) + 102 * t;
+      }
+      // street grid etched through built-up blocks
+      const street = (nb >= 5) && ((x % 3 === 0) !== (y % 3 === 0));
+      if (street) { R = 62; G = 66; B = 78; }
+      else if (nb >= 5 && h > 0.80) { R = 255; G = 206; B = 120; }  // lit windows
+      else { const n = (h - 0.5) * 22; R += n; G += n; B += n; }
+      d[o] = R; d[o+1] = G; d[o+2] = B; d[o+3] = 255;
+    }
+    cc.putImageData(img, 0, 0);
+    cityDirty = false;
+  }
+  function mapRect() {
+    const x0 = 24, y0 = 72, w = VW - 24 - 268, h = VH - 72 - 62;
+    let sc = Math.floor(Math.min(w / IW, h / IH)); if (sc < 1) sc = 1;
+    const iw = IW * sc, ih = IH * sc;
+    return { ox: x0 + (w - iw) / 2, oy: y0 + (h - ih) / 2, s: sc, iw, ih };
+  }
+  function regionScreen(r, ox, oy, sc) { return { x: ox + r.px * sc, y: oy + r.py * sc }; }
+  function buildAtRegion(kind) {
+    const r = REGIONS[state.region]; if (!r) return;
+    const exist = r.structs.find(s => s.kind === kind), cost = BUILD[kind].cost;
+    if (exist && exist.level < 3) {
+      if (state.scrap < cost) { buildMsg('not enough scrap'); return; }
+      state.scrap -= cost; exist.level++;
+      const b = BASE.find(b => b.region === state.region && b.kind === kind); if (b) b.level++;
+      return;
+    }
+    if (exist) { buildMsg('max level'); return; }
+    if (r.structs.length >= 3) { buildMsg('region full'); return; }
+    if (state.scrap < cost) { buildMsg('not enough scrap'); return; }
+    state.scrap -= cost; r.structs.push({ kind, level: 1 }); BASE.push({ region: state.region, kind, level: 1 });
+  }
+
+  // ---- region economy ----
+  // you win a region, invest scrap into it, and it pays that scrap back at the
+  // end of every following round -- win or lose.
+  const DEV_TIERS = [
+    { name: 'OUTPOST',  cost: 45,  yield: 18 },
+    { name: 'MINE',     cost: 95,  yield: 40 },
+    { name: 'REFINERY', cost: 200, yield: 85 },
+  ];
+  function devYield(dev) { let y = 0; for (let i = 0; i < dev; i++) y += DEV_TIERS[i].yield; return y; }
+  function totalIncome() { let y = 0; for (const r of REGIONS) if (r.owned) y += devYield(r.dev); return y; }
+  function developRegion() {
+    const r = REGIONS[state.region]; if (!r) return;
+    if (!r.owned) { buildMsg('capture it first'); return; }
+    if (r.dev >= DEV_TIERS.length) { buildMsg('max development'); return; }
+    const t = DEV_TIERS[r.dev];
+    if (state.scrap < t.cost) { buildMsg('not enough scrap'); return; }
+    state.scrap -= t.cost; r.dev++;
+    for (let k = 0; k < 2 + r.dev * 2; k++) cityStep();
+    buildMsg(r.name + ' \u2192 ' + t.name + '  +' + t.yield + '/round');
+  }
+  function payYields() {
+    let total = 0;
+    for (const r of REGIONS) if (r.owned) total += devYield(r.dev);
+    if (total > 0) {
+      state.scrap += total;
+      state.banner = '+' + total + ' SCRAP FROM YOUR REGIONS';
+      state.bannerT = 2.8; state.bannerCol = '#8fffa8';
+    }
+    return total;
+  }
+  function shotDown() {
+    state.airframes--;
+    burst(P.x, P.y, 40, '#ff5a3c', 320); state.shake = 1.4;
+    // clear the battlefield so the rest of this frame is harmless
+    enemies.length = 0; ebullets.length = 0; bullets.length = 0; missiles.length = 0; bombs.length = 0;
+    const paid = payYields();
+    if (state.airframes <= 0) {
+      state.over = true; state.win = false; saveBest();
+      state.banner = ''; state.bannerT = 0;
+    } else {
+      state.phase = 'build'; P.hp = 100;
+      state.banner = paid > 0 ? state.banner : 'SHOT DOWN \u2014 EXTRACTED';
+      state.bannerCol = paid > 0 ? '#8fffa8' : '#ff9a6a';
+      state.bannerT = 2.8;
+    }
+  }
   function countBase(kind) { let n = 0; for (const b of BASE) if (b.kind === kind) n += b.level; return n; }
   function armorMul() { return Math.max(0.45, 1 - countBase('bunker') * 0.08); }
   function nearestEnemy() { let best = null, bd = 1e9; for (const e of enemies) { if (!e.alive) continue; const d = Math.abs(e.x - P.x); if (d < bd) { bd = d; best = e; } } return best; }
@@ -106,13 +523,28 @@
     state.scrap += 60 + state.wave * 12;
     const rep = countBase('repair'); if (rep > 0) P.hp = Math.min(100, P.hp + 30 * rep);
     const dep = countBase('depot');  if (dep > 0) P.bombs = Math.min(10, P.bombs + 2 + dep);
-    buildMsg('wave ' + state.wave + ' cleared');
+    const rg = REGIONS[state.region];
+    let captured = false;
+    if (rg && !rg.owned) {
+      rg.owned = true; captured = true;
+      citySeedRegion(state.region);
+      rebuildRoads();
+      for (let k = 0; k < 4; k++) cityStep();  // a first burst of construction
+    }
+    const paid = payYields();
+    if (captured) {
+      state.banner = rg.name + ' SECURED';
+      state.bannerCol = '#8fffa8'; if (!(paid > 0)) state.bannerT = 2.8;
+    }
+    buildMsg(captured ? (rg.name + ' secured') : ('wave ' + state.wave + ' cleared'));
+    if (REGIONS.length && REGIONS.every(r => r.owned)) { state.over = true; state.win = true; saveBest(); }
   }
   function startWave() {
     state.wave++; state.phase = 'fly'; state.waveTimer = 0;
     P.bombs = Math.min(10, P.bombs + 2 + countBase('depot'));
     state.buildMsg = ''; state.buildMsgT = 0;
-    for (let i = 0; i < 3 + state.wave; i++) spawnEnemy(P.x + 700 + i * 180 + Math.random() * 120);
+    const rg = REGIONS[state.region];
+    for (let i = 0; i < 3 + state.wave + (rg ? rg.threat - 1 : 0); i++) spawnEnemy(P.x + 700 + i * 180 + Math.random() * 120);
   }
 
   // deterministic per-x RNG so clusters are stable if we ever revisit them
@@ -170,7 +602,15 @@
       for (const f of floaters) { f.life -= dt; f.y -= 22 * dt; }
       for (let i = floaters.length - 1; i >= 0; i--) if (floaters[i].life <= 0) floaters.splice(i, 1);
       if (state.buildMsgT > 0) state.buildMsgT -= dt;
+      if (state.bannerT > 0) state.bannerT -= dt;
+      // let the cities keep filling in while we plan the next push
+      cityAcc += dt; let guard = 0;
+      while (cityAcc >= CITY_TICK && guard++ < 8) { cityAcc -= CITY_TICK; cityStep(); }
       return;
+    }
+    // safety net: any lethal damage (crash, blast) takes the chopper down
+    if (!state.over && state.phase === 'fly' && P.hp <= 0) {
+      P.hp = 0; shotDown(); return;
     }
     if (!state.over) {
       // flight
@@ -327,7 +767,7 @@
       if (!state.over && Math.abs(b.x - P.x) < 34 && Math.abs(b.y - P.y) < 20) {
         b.life = 0; P.hp -= 9 * armorMul(); P.hitFlash = 0.35; state.shake = 0.8;
         burst(P.x, P.y, 8, '#ff8a5c', 180);
-        if (P.hp <= 0) { P.hp = 0; state.over = true; state.win = false; saveBest(); burst(P.x, P.y, 40, '#ff5a3c', 320); }
+        if (P.hp <= 0) { P.hp = 0; shotDown(); }
       }
     }
     for (let i = ebullets.length - 1; i >= 0; i--) if (ebullets[i].life <= 0) ebullets.splice(i, 1);
@@ -354,7 +794,7 @@
         m.life = 0; explode(m.x, m.y, false, true);
         P.hp -= 14 * armorMul(); P.hitFlash = 0.4; state.shake = 1;
         burst(P.x, P.y, 12, '#ff8a5c', 220);
-        if (P.hp <= 0) { P.hp = 0; state.over = true; state.win = false; saveBest(); burst(P.x, P.y, 40, '#ff5a3c', 320); }
+        if (P.hp <= 0) { P.hp = 0; shotDown(); }
         continue;
       }
       if (m.y > groundY(m.x) - 2) { m.life = 0; explode(m.x, groundY(m.x) - 2, false, true); }
@@ -572,85 +1012,133 @@
     if (state.score > state.best) { state.best = state.score; try { localStorage.setItem('dc_best', String(state.best)); } catch (e) {} }
   }
 
-  function drawBaseIcon(x, y, kind, level) {
-    const def = BUILD[kind];
-    ctx.save(); ctx.translate(x, y);
-    ctx.fillStyle = 'rgba(8,12,20,0.6)'; ctx.fillRect(-CELL/2+3, -CELL/2+3, CELL-6, CELL-6);
-    ctx.strokeStyle = def.col; ctx.lineWidth = 2;
-    if (kind === 'turret') { ctx.beginPath(); ctx.arc(0, 0, 11, 0, 6.283); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(13, -9); ctx.stroke(); }
-    else if (kind === 'bunker') { ctx.beginPath(); ctx.moveTo(-13, 9); ctx.lineTo(-13, -3); ctx.lineTo(0, -13); ctx.lineTo(13, -3); ctx.lineTo(13, 9); ctx.closePath(); ctx.stroke(); }
-    else if (kind === 'repair') { ctx.beginPath(); ctx.moveTo(-11, -11); ctx.lineTo(11, -11); ctx.lineTo(11, 11); ctx.lineTo(-11, 11); ctx.closePath(); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(-6, 0); ctx.lineTo(6, 0); ctx.moveTo(0, -6); ctx.lineTo(0, 6); ctx.stroke(); }
-    else if (kind === 'depot') { ctx.beginPath(); ctx.ellipse(0, 0, 12, 8, 0, 0, 6.283); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(-6, 0); ctx.lineTo(6, 0); ctx.stroke(); }
-    ctx.fillStyle = def.col;
-    for (let i = 0; i < level; i++) ctx.fillRect(-CELL/2 + 6 + i * 7, CELL/2 - 9, 5, 4);
-    ctx.restore();
-  }
   function handleBuildClick(x, y) {
-    for (let i = 0; i < 4; i++) { const bw = 156, bx = GRID_X + i * (bw + 4), by = VH - 52; if (x >= bx && x < bx + bw && y >= by && y < by + 38) { state.buildSel = i; return; } }
-    const lb = { x: VW - 276, y: VH - 52, w: 256, h: 38 };
+    for (let i = 0; i < 4; i++) { const bw = 150, bx = 20 + i * (bw + 6), by = VH - 50; if (x >= bx && x < bx + bw && y >= by && y < by + 36) { buildAtRegion(DEF_ORDER[i]); return; } }
+    const lb = { x: VW - 236, y: VH - 50, w: 216, h: 36 };
     if (x >= lb.x && x < lb.x + lb.w && y >= lb.y && y < lb.y + lb.h) { startWave(); return; }
-    if (x >= GRID_X && x < GRID_X + GRID_W * CELL && y >= GRID_Y && y < GRID_Y + GRID_H * CELL) {
-      const gx = Math.floor((x - GRID_X) / CELL), gy = Math.floor((y - GRID_Y) / CELL);
-      const occ = BASE.find(b => b.gx === gx && b.gy === gy);
-      const kind = DEF_ORDER[state.buildSel];
-      if (!occ) {
-        if (state.scrap >= BUILD[kind].cost) { state.scrap -= BUILD[kind].cost; BASE.push({ gx, gy, kind, level: 1 }); }
-        else buildMsg('not enough scrap');
-      } else {
-        const uc = BUILD[occ.kind].cost;
-        if (occ.level >= 3) buildMsg('max level');
-        else if (state.scrap >= uc) { state.scrap -= uc; occ.level++; }
-        else buildMsg('not enough scrap');
-      }
+    const db = { x: VW - 244, y: 200, w: 212, h: 30 };
+    if (x >= db.x && x < db.x + db.w && y >= db.y && y < db.y + db.h) { developRegion(); return; }
+    const M = mapRect();
+    for (let i = 0; i < REGIONS.length; i++) {
+      const p = regionScreen(REGIONS[i], M.ox, M.oy, M.s);
+      if (x > p.x - 22 && x < p.x + 22 && y > p.y - 22 && y < p.y + 22) { state.region = i; return; }
     }
   }
   function drawBuild() {
-    ctx.fillStyle = '#070b16'; ctx.fillRect(0, 0, VW, VH);
-    ctx.textAlign = 'left'; ctx.fillStyle = '#f0b46b';
-    ctx.font = '700 22px ui-monospace,Menlo,monospace';
-    ctx.fillText('BASE // DEPLOYMENT', 24, 40);
-    ctx.fillStyle = '#8b97a8'; ctx.font = '600 13px ui-monospace,Menlo,monospace';
-    ctx.fillText('build your base, then launch wave ' + (state.wave + 1) + '  ·  click a cell to place / upgrade', 24, 62);
-    ctx.textAlign = 'right'; ctx.fillStyle = '#ffd27a'; ctx.font = '700 18px ui-monospace,Menlo,monospace';
-    ctx.fillText('SCRAP ' + Math.floor(state.scrap), VW - 24, 40);
+    if (!islCanvas) buildIsland();
+    ctx.fillStyle = '#05080f'; ctx.fillRect(0, 0, VW, VH);
+    ctx.fillStyle = '#0a1220'; ctx.fillRect(0, 64, VW, VH - 64 - 62);
+    const M = mapRect();
+    ctx.imageSmoothingEnabled = false;
+    if ((!mapCanvas && islCanvas) || cityDirty) renderCity();
+    if (mapCanvas) ctx.drawImage(mapCanvas, M.ox, M.oy, M.iw, M.ih);
+    // header
+    ctx.textAlign = 'left'; ctx.fillStyle = '#f0b46b'; ctx.font = '700 20px ui-monospace,Menlo,monospace';
+    ctx.fillText('CAMPAIGN // ISLAND', 24, 38);
+    ctx.fillStyle = '#8b97a8'; ctx.font = '600 12px ui-monospace,Menlo,monospace';
+    ctx.fillText('click a region \u00b7 fortify it \u00b7 DEVELOP it once you own it \u00b7 then LAUNCH', 24, 58);
+    ctx.textAlign = 'right'; ctx.font = '700 16px ui-monospace,Menlo,monospace';
+    ctx.fillStyle = '#ffd27a'; ctx.fillText('SCRAP ' + Math.floor(state.scrap), VW - 24, 28);
+    ctx.fillStyle = '#8b97a8'; ctx.font = '600 12px ui-monospace,Menlo,monospace';
+    ctx.fillText('WAVE ' + state.wave, VW - 24, 48);
+    ctx.fillStyle = totalIncome() > 0 ? '#8fffa8' : '#4d5a6e';
+    ctx.fillText('INCOME +' + totalIncome() + '/round', VW - 24, 68);
     ctx.textAlign = 'left';
-    for (let gy = 0; gy < GRID_H; gy++) for (let gx = 0; gx < GRID_W; gx++) {
-      const x = GRID_X + gx * CELL, y = GRID_Y + gy * CELL;
-      ctx.fillStyle = ((gx + gy) & 1) ? 'rgba(30,42,64,0.55)' : 'rgba(24,34,54,0.55)';
-      ctx.fillRect(x, y, CELL, CELL);
-      ctx.strokeStyle = 'rgba(90,120,170,0.25)'; ctx.strokeRect(x + 0.5, y + 0.5, CELL - 1, CELL - 1);
+    // region nodes
+    for (let i = 0; i < REGIONS.length; i++) {
+      const r = REGIONS[i], p = regionScreen(r, M.ox, M.oy, M.s), sel = i === state.region;
+      ctx.fillStyle = 'rgba(5,8,15,0.72)'; ctx.fillRect(p.x - 13, p.y - 13, 26, 26);
+      ctx.strokeStyle = r.owned ? '#8fffa8' : sel ? '#ffd27a' : '#9fb4d0';
+      ctx.lineWidth = sel ? 3 : 2; ctx.strokeRect(p.x - 12.5, p.y - 12.5, 25, 25);
+      ctx.fillStyle = r.owned ? '#8fffa8' : sel ? '#ffd27a' : '#dbe6f2';
+      ctx.font = '700 14px ui-monospace,Menlo,monospace'; ctx.textAlign = 'center';
+      ctx.fillText(String(i + 1), p.x, p.y + 5);
+      r.structs.forEach((st, k) => { ctx.fillStyle = BUILD[st.kind].col; ctx.fillRect(p.x - 10 + k * 7, p.y + 15, 5, 5); });
+      if (r.owned) {
+        // development pips
+        for (let k = 0; k < DEV_TIERS.length; k++) {
+          ctx.fillStyle = k < r.dev ? '#8fffa8' : 'rgba(143,255,168,0.22)';
+          ctx.fillRect(p.x - 9 + k * 7, p.y - 20, 5, 5);
+        }
+        if (devYield(r.dev) > 0) {
+          ctx.fillStyle = '#b8f0c4'; ctx.font = '700 10px ui-monospace,Menlo,monospace';
+          ctx.fillText('+' + devYield(r.dev), p.x, p.y - 25);
+        }
+      }
+      if (sel || r.owned) { ctx.fillStyle = sel ? '#ffe6bf' : '#9fe6b4'; ctx.font = '600 11px ui-monospace,Menlo,monospace'; ctx.fillText(r.name, p.x, p.y + 36); }
+      ctx.textAlign = 'left';
     }
-    for (const b of BASE) drawBaseIcon(GRID_X + b.gx * CELL + CELL / 2, GRID_Y + b.gy * CELL + CELL / 2, b.kind, b.level);
-    if (mouse.x >= GRID_X && mouse.x < GRID_X + GRID_W * CELL && mouse.y >= GRID_Y && mouse.y < GRID_Y + GRID_H * CELL) {
-      const gx = Math.floor((mouse.x - GRID_X) / CELL), gy = Math.floor((mouse.y - GRID_Y) / CELL);
-      const occ = BASE.find(b => b.gx === gx && b.gy === gy);
-      ctx.globalAlpha = 0.25; ctx.fillStyle = occ ? '#ffd27a' : BUILD[DEF_ORDER[state.buildSel]].col;
-      ctx.fillRect(GRID_X + gx * CELL + 3, GRID_Y + gy * CELL + 3, CELL - 6, CELL - 6); ctx.globalAlpha = 1;
-      ctx.strokeStyle = occ ? '#ffd27a' : '#7fd0ff'; ctx.lineWidth = 2;
-      ctx.strokeRect(GRID_X + gx * CELL + 1, GRID_Y + gy * CELL + 1, CELL - 2, CELL - 2);
+    // intel panel
+    const r = REGIONS[state.region];
+    if (r) {
+      const PX = VW - 252, PY = 72, PW = 228, PH = 190;
+      ctx.fillStyle = 'rgba(6,10,18,0.88)'; ctx.fillRect(PX, PY, PW, PH);
+      ctx.strokeStyle = r.owned ? 'rgba(143,255,168,0.55)' : 'rgba(120,150,190,0.5)'; ctx.lineWidth = 1;
+      ctx.strokeRect(PX + 0.5, PY + 0.5, PW - 1, PH - 1);
+      ctx.textAlign = 'left';
+      ctx.fillStyle = '#ffd27a'; ctx.font = '700 14px ui-monospace,Menlo,monospace';
+      ctx.fillText(r.name, PX + 12, PY + 22);
+      ctx.fillStyle = '#9fb4d0'; ctx.font = '600 12px ui-monospace,Menlo,monospace';
+      ctx.fillText('terrain  ' + r.terrain, PX + 12, PY + 42);
+      ctx.fillText('threat   ' + '^'.repeat(Math.min(5, r.threat)), PX + 12, PY + 59);
+      ctx.fillStyle = r.owned ? '#8fffa8' : '#ff9a6a';
+      ctx.fillText('status   ' + (r.owned ? 'SECURED' : 'hostile'), PX + 12, PY + 76);
+      ctx.fillStyle = '#5d6b80'; ctx.fillRect(PX + 10, PY + 86, PW - 20, 1);
+      if (r.owned) {
+        const tier = DEV_TIERS[r.dev];
+        ctx.fillStyle = '#9fb4d0'; ctx.font = '600 12px ui-monospace,Menlo,monospace';
+        ctx.fillText('dev      ' + (r.dev ? DEV_TIERS[r.dev - 1].name : 'none') + '  (L' + r.dev + '/3)', PX + 12, PY + 104);
+        ctx.fillStyle = '#8fffa8';
+        ctx.fillText('yield    +' + devYield(r.dev) + ' scrap / round', PX + 12, PY + 121);
+        // develop button
+        const db = { x: PX + 12, y: PY + 128, w: PW - 24, h: 30 };
+        const afford = tier && state.scrap >= tier.cost;
+        ctx.fillStyle = !tier ? 'rgba(80,90,110,0.3)' : afford ? 'rgba(120,220,140,0.18)' : 'rgba(255,110,90,0.12)';
+        ctx.fillRect(db.x, db.y, db.w, db.h);
+        ctx.strokeStyle = !tier ? 'rgba(120,150,190,0.5)' : afford ? '#7fdc8c' : 'rgba(255,140,110,0.6)';
+        ctx.lineWidth = 1; ctx.strokeRect(db.x + 0.5, db.y + 0.5, db.w - 1, db.h - 1);
+        ctx.fillStyle = !tier ? '#7d8a9c' : afford ? '#b8f0c4' : '#c98a80';
+        ctx.font = '700 12px ui-monospace,Menlo,monospace'; ctx.textAlign = 'center';
+        ctx.fillText(!tier ? 'MAX DEVELOPMENT' : ('DEVELOP \u2192 ' + tier.name + '  ' + tier.cost + ' scrap'),
+                     db.x + db.w / 2, db.y + 20);
+        ctx.textAlign = 'left';
+      } else {
+        ctx.fillStyle = '#7d8a9c'; ctx.font = '600 12px ui-monospace,Menlo,monospace';
+        ctx.fillText('develop', PX + 12, PY + 112);
+        ctx.fillStyle = '#c98a80'; ctx.font = '700 12px ui-monospace,Menlo,monospace';
+        ctx.fillText('capture this region first', PX + 12, PY + 134);
+      }
+      ctx.fillStyle = '#5d6b80'; ctx.fillRect(PX + 10, PY + 166, PW - 20, 1);
+      ctx.fillStyle = '#8b97a8'; ctx.font = '600 12px ui-monospace,Menlo,monospace';
+      ctx.fillText('AIRFRAMES', PX + 12, PY + 184);
+      for (let i = 0; i < 3; i++) {
+        ctx.beginPath(); ctx.arc(PX + 96 + i * 15, PY + 180, 5, 0, 6.283);
+        ctx.fillStyle = i < state.airframes ? '#7fdc8c' : 'rgba(127,220,140,0.22)'; ctx.fill();
+      }
     }
+    // build buttons
     for (let i = 0; i < 4; i++) {
-      const def = BUILD[DEF_ORDER[i]], bw = 156, bh = 38, bx = GRID_X + i * (bw + 4), by = VH - 52;
-      const sel = i === state.buildSel;
-      ctx.fillStyle = sel ? 'rgba(255,210,122,0.18)' : 'rgba(20,28,44,0.85)'; ctx.fillRect(bx, by, bw, bh);
-      ctx.strokeStyle = sel ? '#ffd27a' : 'rgba(90,120,170,0.5)'; ctx.lineWidth = sel ? 2 : 1; ctx.strokeRect(bx + 0.5, by + 0.5, bw - 1, bh - 1);
-      ctx.fillStyle = def.col; ctx.font = '700 13px ui-monospace,Menlo,monospace'; ctx.fillText((i + 1) + ' ' + def.name, bx + 10, by + 17);
-      ctx.fillStyle = '#8b97a8'; ctx.font = '600 11px ui-monospace,Menlo,monospace'; ctx.fillText(def.cost + ' scrap', bx + 10, by + 31);
+      const def = BUILD[DEF_ORDER[i]], bw = 150, bh = 36, bx = 20 + i * (bw + 6), by = VH - 50;
+      const has = r && r.structs.some(s => s.kind === DEF_ORDER[i]);
+      ctx.fillStyle = has ? 'rgba(255,210,122,0.16)' : 'rgba(20,28,44,0.9)'; ctx.fillRect(bx, by, bw, bh);
+      ctx.strokeStyle = has ? '#ffd27a' : 'rgba(90,120,170,0.55)'; ctx.lineWidth = 1; ctx.strokeRect(bx + 0.5, by + 0.5, bw - 1, bh - 1);
+      ctx.fillStyle = def.col; ctx.font = '700 12px ui-monospace,Menlo,monospace'; ctx.fillText((i + 1) + ' ' + def.name, bx + 8, by + 15);
+      ctx.fillStyle = '#8b97a8'; ctx.font = '600 10px ui-monospace,Menlo,monospace'; ctx.fillText(def.cost + ' scrap \u00b7 ' + (has ? 'upgrade' : 'build here'), bx + 8, by + 29);
     }
-    ctx.fillStyle = '#5c6b7d'; ctx.font = '600 11px ui-monospace,Menlo,monospace';
-    ctx.fillText(DEF_ORDER && BUILD[DEF_ORDER[state.buildSel]].desc, GRID_X, VH - 58);
-    const lb = { x: VW - 276, y: VH - 52, w: 256, h: 38 };
-    ctx.fillStyle = 'rgba(120,220,140,0.16)'; ctx.fillRect(lb.x, lb.y, lb.w, lb.h);
+    const lb = { x: VW - 236, y: VH - 50, w: 216, h: 36 };
+    ctx.fillStyle = 'rgba(120,220,140,0.18)'; ctx.fillRect(lb.x, lb.y, lb.w, lb.h);
     ctx.strokeStyle = '#7fdc8c'; ctx.lineWidth = 2; ctx.strokeRect(lb.x + 0.5, lb.y + 0.5, lb.w - 1, lb.h - 1);
-    ctx.fillStyle = '#b8f0c4'; ctx.font = '700 15px ui-monospace,Menlo,monospace'; ctx.textAlign = 'center';
-    ctx.fillText('LAUNCH WAVE ' + (state.wave + 1) + '  [space]', lb.x + lb.w / 2, lb.y + 24);
+    ctx.fillStyle = '#b8f0c4'; ctx.font = '700 13px ui-monospace,Menlo,monospace'; ctx.textAlign = 'center';
+    ctx.fillText('LAUNCH  \u25b6  ' + (r ? r.name : '') + '  [space]', lb.x + lb.w / 2, lb.y + 23);
+    if (state.bannerT > 0) {
+      ctx.globalAlpha = Math.min(1, state.bannerT * 1.5); ctx.fillStyle = state.bannerCol;
+      ctx.font = '700 17px ui-monospace,Menlo,monospace'; ctx.textAlign = 'center';
+      ctx.fillText(state.banner, 470, 34); ctx.textAlign = 'left'; ctx.globalAlpha = 1;
+    }
     if (state.buildMsgT > 0) {
       ctx.globalAlpha = Math.min(1, state.buildMsgT * 2); ctx.fillStyle = '#ff6b5a';
-      ctx.font = '700 14px ui-monospace,Menlo,monospace';
-      ctx.fillText(state.buildMsg, VW / 2, GRID_Y - 8); ctx.globalAlpha = 1;
+      ctx.font = '700 13px ui-monospace,Menlo,monospace';
+      ctx.fillText(state.buildMsg, VW / 2 + 100, VH - 58); ctx.globalAlpha = 1;
     }
     ctx.textAlign = 'left';
   }
@@ -781,6 +1269,33 @@
     // hp pips
     if (e.hp > 1) { ctx.fillStyle = '#ffe066'; for (let i = 0; i < e.hp; i++) ctx.fillRect(x - 7 + i * 6, y - 56, 4, 4); }
   }
+  // live minimap during flight: the same baked map shrinks into a corner so you
+  // can watch your cities grow while you fly.
+  function drawMinimap() {
+    if (!mapCanvas || cityDirty) renderCity();
+    if (!mapCanvas) return;
+    const w = 132, h = w * IH / IW;
+    const x = VW - w - 18, y = 52;
+    ctx.save();
+    ctx.globalAlpha = 0.92;
+    ctx.imageSmoothingEnabled = false;
+    ctx.fillStyle = 'rgba(5,8,15,0.7)'; ctx.fillRect(x - 3, y - 3, w + 6, h + 6);
+    ctx.drawImage(mapCanvas, x, y, w, h);
+    for (let i = 0; i < REGIONS.length; i++) {
+      const r = REGIONS[i], px = x + r.px * (w / IW), py = y + r.py * (h / IH);
+      ctx.beginPath(); ctx.arc(px, py, 2.2, 0, 6.283);
+      ctx.fillStyle = r.owned ? '#8fffa8' : '#dbe6f2'; ctx.fill();
+    }
+    const crg = REGIONS[state.region];
+    if (crg) {
+      const px = x + crg.px * (w / IW), py = y + crg.py * (h / IH);
+      ctx.strokeStyle = '#ffd27a'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(px, py, 5, 0, 6.283); ctx.stroke();
+    }
+    ctx.strokeStyle = 'rgba(120,150,190,0.55)'; ctx.lineWidth = 1;
+    ctx.strokeRect(x - 2.5, y - 2.5, w + 5, h + 5);
+    ctx.restore();
+  }
   function drawHUD() {
     ctx.save();
     ctx.font = '600 13px ui-monospace,Menlo,monospace';
@@ -793,10 +1308,25 @@
       ctx.beginPath(); ctx.arc(74 + i * 14, 66, 5, 0, 6.283);
       ctx.fillStyle = i < P.bombs ? '#8fd0ff' : 'rgba(140,160,190,0.25)'; ctx.fill();
     }
+    // airframes
+    ctx.fillStyle = '#8b97a8'; ctx.fillText('AIRFRAMES', 18, 92);
+    for (let i = 0; i < 3; i++) {
+      ctx.beginPath(); ctx.arc(88 + i * 14, 88, 5, 0, 6.283);
+      ctx.fillStyle = i < state.airframes ? '#7fdc8c' : 'rgba(127,220,140,0.22)'; ctx.fill();
+    }
+    const inc = totalIncome();
+    if (inc > 0) { ctx.fillStyle = '#8fffa8'; ctx.fillText('INCOME +' + inc + '/round', 18, 112); }
+    // region being contested
+    const crg = REGIONS[state.region];
+    if (crg) {
+      ctx.textAlign = 'center'; ctx.fillStyle = crg.owned ? '#8fffa8' : '#ffd27a';
+      ctx.fillText(crg.name + (crg.owned ? '  \u00b7  defending' : '  \u00b7  contested'), VW / 2, 30);
+      ctx.textAlign = 'left';
+    }
     if (state.warCrimes > 0) {
       const g = state.wcFlash > 0 ? Math.min(1, state.wcFlash) : 0;
       ctx.fillStyle = g > 0 ? '#ffffff' : '#ff6b5a';
-      ctx.fillText('WAR CRIMES ' + state.warCrimes, 18, 90);
+      ctx.fillText('WAR CRIMES ' + state.warCrimes, 18, 132);
     }
     ctx.fillStyle = '#8b97a8'; ctx.textAlign = 'right';
     ctx.fillText('BEST ' + Math.max(state.best, state.score), VW - 18, 30);
@@ -822,11 +1352,14 @@
     if (state.over) {
       ctx.fillStyle = 'rgba(5,7,15,0.72)'; ctx.fillRect(0, 0, VW, VH);
       ctx.textAlign = 'center';
-      ctx.fillStyle = '#ff6b5a'; ctx.font = '700 44px ui-monospace,Menlo,monospace';
-      ctx.fillText('CHOPPA DOWN', VW / 2, VH / 2 - 40);
+      const won = !!state.win;
+      const owned = REGIONS.filter(r => r.owned).length;
+      ctx.fillStyle = won ? '#8fffa8' : '#ff6b5a'; ctx.font = '700 44px ui-monospace,Menlo,monospace';
+      ctx.fillText(won ? 'ISLAND SECURED' : 'CAMPAIGN LOST', VW / 2, VH / 2 - 40);
       ctx.fillStyle = '#ffe6bf'; ctx.font = '600 20px ui-monospace,Menlo,monospace';
-      ctx.fillText('score ' + state.score + '  ·  wave ' + state.wave
-                   + (state.warCrimes > 0 ? '  ·  war crimes ' + state.warCrimes : ''), VW / 2, VH / 2 + 4);
+      ctx.fillText('score ' + state.score + '  ·  wave ' + state.wave + '  ·  regions held ' + owned + '/' + REGIONS.length, VW / 2, VH / 2 + 4);
+      ctx.fillStyle = '#9fb4d0'; ctx.font = '600 15px ui-monospace,Menlo,monospace';
+      ctx.fillText(won ? 'every region is yours \u00b7 the archipelago pays tribute' : 'out of airframes \u00b7 the archipelago stays free', VW / 2, VH / 2 + 30);
       const blink = 0.55 + 0.45 * Math.sin(state.t * 6);
       ctx.globalAlpha = blink; ctx.fillStyle = '#ffd27a';
       ctx.fillText('press R to fly again', VW / 2, VH / 2 + 46); ctx.globalAlpha = 1;
@@ -885,6 +1418,7 @@
     for (const p of parts) { ctx.globalAlpha = Math.max(0, p.life); ctx.fillStyle = p.col; ctx.fillRect(p.x - state.camX - 1.5, p.y - 1.5, 3, 3); }
     ctx.globalAlpha = 1;
     ctx.restore();
+    drawMinimap();
     drawHUD();
   }
 
@@ -898,5 +1432,8 @@
   }
   state.camX = -40; reset();
   requestAnimationFrame(loop);
-  if (location.hash === "#debug") window.DC = { state, enemies, bullets, ebullets, parts, bombs, booms, structs, missiles, P, mouse, keys, ensureStructs, get genX(){return genX;}, get camX(){return state.camX;}, frame(dt){ update(dt); draw(); } };
+  if (location.hash === "#debug") window.DC = { state, REGIONS, BASE, DEV_TIERS, buildAtRegion, developRegion, devYield, totalIncome, payYields, shotDown, endWave, startWave, reset, buildIsland, mapRect, handleBuildClick, enemies, bullets, ebullets, parts, bombs, booms, structs, missiles, P, mouse, keys, ensureStructs, get genX(){return genX;}, get camX(){return state.camX;}, frame(dt){ update(dt); draw(); },
+    syncCity, cityStep, rebuildRoads, renderCity,
+    get urban(){return urban;}, get road(){return road;}, get landMask(){return landMask;},
+    get mapCanvas(){return mapCanvas;}, get cityCanvas(){return mapCanvas;}, get cityDirty(){return cityDirty;} };
 })();
