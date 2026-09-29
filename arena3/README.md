@@ -1,18 +1,7 @@
-# ARENA3 — a bounded arena roguelike on ioquake3
+# ARENA3 — web viewer
 
-Open `index.html`. Move WASD, look with the mouse, click to shoot, Esc for menu.
+Static host for the ARENA3 roguelike. `index.html` is a dependency-free WebGL2
+viewer that loads `arena3.wasm` and drives it via `a3_step`. No build step and no
+runtime fetch beyond the wasm — playable straight from any static host.
 
-## What it is
-A roguelike *mod* (`vm/qagame.qvm`) running on the ioquake3 engine compiled to
-WebAssembly. Each "room" is a real Quake 3 / OpenArena arena map used as a prefab.
-Clear the room's bot encounter, then walk into one of two portals — each carries a
-different permanent upgrade drawn from Quake 3's own mechanics (weapons, armour,
-quad, haste, battlesuit, regen, invisibility, flight, megahealth, ammo). Clear 5
-rooms to win; 3 lives.
-
-## Provenance / licensing
-- **Engine:** ioquake3 (GPLv2), built to wasm with Emscripten.
-- **Game data:** OpenArena (GPL/CC-BY-SA) — `baseoa/pak0.pk3`, and a texture pack.
-- **Mod code / maps / bots:** this repo — `baseoa/zz-arena3.pk3` (QVM), `arena3-maps.pk3`, `arena3-misc.pk3`.
-
-No id Software / Quake 3 retail or demo assets are included.
+Controls: WASD move · mouse look · left-click shoot · 1-4 weapon · Tab map · Enter start.

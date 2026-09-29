@@ -1,96 +1,377 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
-<title>ARENA3 — a bounded arena roguelike (ioquake3 + OpenArena)</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>ARENA3 — Quake3-flavoured arena roguelike</title>
 <style>
-  html,body{margin:0;height:100%;background:#08090c;color:#cfd6e4;font-family:system-ui,Segoe UI,Roboto,sans-serif;overflow:hidden}
+  :root{--ink:#e8e2d4;--dim:#8d8478;--gold:#d9b465;--blood:#c0402a;--line:#1b2129}
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;background:#05070a;overflow:hidden;font-family:ui-monospace,Menlo,monospace;color:var(--ink)}
   #wrap{position:fixed;inset:0}
-  canvas{display:block;width:100%;height:100%;object-fit:contain;background:#000;cursor:crosshair}
-  #ui{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at 50% 30%,#141821,#05060a);z-index:10;text-align:center;padding:24px}
-  #ui h1{margin:0 0 6px;font-size:clamp(28px,6vw,64px);letter-spacing:.12em;color:#ff5a3c;text-shadow:0 0 24px #ff2a00}
-  #ui p{max-width:640px;line-height:1.5;color:#93a0b8}
-  #ui .k{color:#ffd479}
-  #ui .small{font-size:12px;color:#5f6b82;margin-top:18px}
-  button{margin-top:22px;padding:14px 34px;font-size:18px;letter-spacing:.1em;background:#ff4a2a;color:#fff;border:0;border-radius:6px;cursor:pointer}
-  button:hover{background:#ff6a4a}
-  #bar{position:fixed;left:0;right:0;bottom:0;height:34px;display:flex;align-items:center;gap:14px;padding:0 14px;font-size:12px;color:#7d8aa3;background:linear-gradient(transparent,#05060acc);z-index:5;pointer-events:none}
-  #stat{color:#ffd479}
+  canvas{position:absolute;inset:0;width:100%;height:100%;display:block;image-rendering:auto;cursor:none}
+  /* ---------- HUD ---------- */
+  #hud{position:absolute;inset:0;pointer-events:none;z-index:5}
+  .panel{position:absolute;padding:10px 14px;background:rgba(6,9,13,.62);border:1px solid var(--line);border-radius:10px;backdrop-filter:blur(3px)}
+  #tl{left:18px;top:18px;min-width:230px}
+  #tr{right:18px;top:18px;text-align:right}
+  #bl{left:18px;bottom:18px}
+  #br{right:18px;bottom:18px;text-align:right}
+  .big{font-size:30px;font-weight:700;letter-spacing:-1px;line-height:1}
+  .lbl{font-size:10px;letter-spacing:.22em;text-transform:uppercase;color:var(--dim)}
+  .bar{height:9px;border-radius:5px;background:#241014;margin-top:6px;overflow:hidden;border:1px solid #000}
+  .bar>i{display:block;height:100%;background:linear-gradient(90deg,#c0402a,#e0684a);transition:width .12s}
+  .armbar>i{background:linear-gradient(90deg,#1e6fa8,#4db2e8)}
+  .row{display:flex;gap:18px;align-items:flex-end}
+  .ammo{color:var(--gold);font-size:22px}
+  .wep{font-size:16px;color:#e8e2d4}
+  .room{color:var(--gold);font-size:15px;letter-spacing:.06em}
+  /* ---------- overlays ---------- */
+  .ov{position:absolute;inset:0;z-index:20;display:none;flex-direction:column;align-items:center;justify-content:center;text-align:center;background:radial-gradient(60% 60% at 50% 45%,rgba(6,9,13,.86),rgba(2,3,5,.96));padding:24px}
+  .ov.show{display:flex}
+  .ov h1{font-size:clamp(34px,7vw,68px);letter-spacing:-.03em;font-weight:800}
+  .ov h1 .g{color:var(--gold)}
+  .ov p{color:var(--dim);max-width:560px;margin-top:14px;font-size:15px;line-height:1.65}
+  .keys{margin-top:22px;color:#cfc7ba;font-size:14px;line-height:2}
+  kbd{background:#161c24;border:1px solid #2a333f;border-bottom-width:2px;border-radius:6px;padding:1px 8px;font-family:inherit;color:#fff}
+  .cta{margin-top:26px;pointer-events:auto;cursor:pointer;background:var(--gold);color:#1a1305;border:0;border-radius:10px;padding:14px 34px;font-size:17px;font-weight:700;font-family:inherit;letter-spacing:.04em}
+  .cta:hover{filter:brightness(1.08)}
+  /* choose cards */
+  #cards{display:flex;gap:22px;margin-top:26px;flex-wrap:wrap;justify-content:center}
+  .card{pointer-events:auto;cursor:pointer;width:270px;text-align:left;background:linear-gradient(180deg,#10151c,#0a0e13);border:1px solid #2a333f;border-radius:14px;padding:20px;transition:.16s}
+  .card:hover{border-color:var(--gold);transform:translateY(-4px);box-shadow:0 12px 34px rgba(217,180,101,.12)}
+  .card .k{font-size:11px;letter-spacing:.26em;text-transform:uppercase;color:var(--gold)}
+  .card .n{font-size:22px;font-weight:700;margin:10px 0 8px;letter-spacing:-.02em}
+  .card .d{color:var(--dim);font-size:13.5px;line-height:1.55}
+  .card .hint{position:absolute;bottom:14px;right:16px;color:#4c463d;font-size:12px}
+  #toast{position:absolute;left:50%;top:76px;transform:translateX(-50%);z-index:6;color:var(--gold);font-size:14px;letter-spacing:.14em;text-transform:uppercase;opacity:0;transition:opacity .3s}
 </style>
 </head>
 <body>
-<div id="wrap"><canvas id="canvas" tabindex="0"></canvas></div>
-<div id="bar"><span>ARENA3</span><span id="stat">booting…</span></div>
-<div id="ui">
-  <div>
-    <h1>ARENA3</h1>
-    <p>A bounded, Quake&nbsp;3-flavoured <b>arena roguelike</b> running on <b>ioquake3</b>
-       with <b>OpenArena</b>'s free data set. Clear each room's bots, then walk into one
-       of two portals &mdash; each portal carries a permanent upgrade. Clear <b>5 rooms</b> to win.</p>
-    <p class="small">
-      <span class="k">WASD</span> move &nbsp;·&nbsp; <span class="k">Mouse</span> look &nbsp;·&nbsp;
-      <span class="k">Click</span> shoot &nbsp;·&nbsp; <span class="k">1-9</span> weapons &nbsp;·&nbsp;
-      <span class="k">Esc</span> menu
-    </p>
-    <button id="go">ENTER THE ARENA</button>
-    <p class="small">OpenArena data © its authors, GPL/CC-BY-SA. ioquake3 © id Software / ioquake3 team.</p>
+<div id="wrap">
+  <canvas id="c"></canvas>
+
+  <div id="hud">
+    <div class="panel" id="tl">
+      <div class="lbl">Health</div>
+      <div class="big"><span id="hp">125</span><span style="font-size:15px;color:var(--dim)"> / <span id="hpm">100</span></span></div>
+      <div class="bar"><i id="hpbar"></i></div>
+      <div class="lbl" style="margin-top:10px">Armor <span id="ar">0</span></div>
+      <div class="bar armbar"><i id="arbar"></i></div>
+    </div>
+    <div class="panel" id="tr">
+      <div class="room" id="roomname">—</div>
+      <div class="lbl" style="margin-top:6px">Depth <span id="depth" style="color:var(--ink)">0</span></div>
+      <div class="lbl">Kills <span id="kills" style="color:var(--ink)">0</span> &nbsp;·&nbsp; Score <span id="score" style="color:var(--gold)">0</span></div>
+      <div class="lbl">Monsters <span id="alive" style="color:var(--ink)">0</span></div>
+    </div>
+    <div class="panel" id="bl">
+      <div class="wep" id="wep">MACHINEGUN</div>
+      <div class="ammo" id="ammo">100</div>
+      <div class="lbl" id="ammoname">BULLETS</div>
+    </div>
+    <div class="panel" id="br">
+      <div class="lbl">Cleared</div>
+      <div class="big" style="font-size:22px"><span id="cleared">0</span> / 12</div>
+    </div>
+    <div id="toast"></div>
+  </div>
+
+  <div class="ov show" id="ovstart">
+    <h1>ARENA<span class="g">3</span></h1>
+    <p>A Quake&nbsp;3-flavoured arena roguelike. Clear monster-filled rooms, then pick one of two doors — each grants an upgrade. Survive <b style="color:var(--ink)">12 rooms</b> to win.</p>
+    <div class="keys">
+      <div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move &nbsp;·&nbsp; <kbd>mouse</kbd> aim &nbsp;·&nbsp; <kbd>click</kbd>/<kbd>space</kbd> fire</div>
+      <div><kbd>1</kbd> <kbd>2</kbd> or walk into a door to choose an upgrade</div>
+      <div><kbd>R</kbd> restart</div>
+    </div>
+    <button class="cta" id="btnstart">ENTER THE ARENA</button>
+  </div>
+
+  <div class="ov" id="ovchoose">
+    <h1 style="font-size:clamp(26px,4.5vw,44px)">ROOM CLEARED</h1>
+    <p>Choose your reward. Click a card, press <kbd>1</kbd>/<kbd>2</kbd>, or walk into the matching door.</p>
+    <div id="cards"></div>
+  </div>
+
+  <div class="ov" id="ovdead">
+    <h1 style="color:var(--blood)">YOU DIED</h1>
+    <p id="deadstats"></p>
+    <button class="cta" id="btndead">TRY AGAIN</button>
+  </div>
+
+  <div class="ov" id="ovwin">
+    <h1>ARENA <span class="g">CLEARED</span></h1>
+    <p id="winstats"></p>
+    <button class="cta" id="btnwin">PLAY AGAIN</button>
   </div>
 </div>
-<script type="module">
-const CLIENT_NAME = 'ioquake3';
-const BASEGAME = 'baseoa';
-const canvas = document.getElementById('canvas');
-const stat = document.getElementById('stat');
-window.addEventListener('error', e => stat.textContent = 'ERR ' + (e.message||''));
 
-const params = new URLSearchParams(location.search);
-let args = `
-  +set sv_pure 0
-  +set net_enabled 0
-  +set r_mode -2
-  +set com_basegame "${BASEGAME}"
-  +set fs_basegame ""
-  +set fs_game ""
-  +set a3_enable 1
-  +set g_gametype 0
-  +set bot_enable 1
-  +set sv_maxclients 8
-  +set s_initsound 1
-  +map oa_dm1
-`;
-if (params.get('args')) args += ' ' + params.get('args');
+<script>
+"use strict";
+window.onerror=(m,src,l,c)=>{document.title="JSERR: "+m+" @"+l+":"+c;};
+window.onunhandledrejection=e=>{document.title="PROMERR: "+(e.reason&&e.reason.message||e.reason);};
+const CELL=48, ROOMW=20, ROOMH=20, WORLD=CELL*ROOMW, VICTORY=12;
+let ex=null, mem=null, DV=null;
+const cv=document.getElementById('c'), ctx=cv.getContext('2d');
+let W=0,H=0,DPR=1;
 
-const configPromise = fetch('./a3-config.json').then(r => r.ok ? r.json() : ({}));
-const mod = (await import('./ioquake3.js')).default;
+const memF32=o=>DV.getFloat32(o,true), memI32=o=>DV.getInt32(o,true);
+function cstr(ptr){ if(!ptr) return ''; const u=new Uint8Array(mem.buffer); let s=''; for(let i=ptr;i<u.length;i++){const ch=u[i]; if(!ch)break; s+=String.fromCharCode(ch);} return s; }
 
-async function boot(){
-  document.getElementById('ui').remove();
-  stat.textContent = 'downloading data…';
-  await mod({
-    canvas,
-    arguments: args.trim().split(/\s+/),
-    locateFile: f => './' + f,
-    print: t => { try{console.log(String(t).trim());}catch(e){} }, err: t => stat.textContent = String(t).slice(0,120),
-    preRun: [async (m) => {
-      m.addRunDependency('fs');
-      try {
-        const config = await configPromise;
-        const files = (config[BASEGAME]||{}).files||[];
-        let done = 0;
-        for (const f of files){
-          stat.textContent = `loading ${f.src.split('/').pop()} (${++done}/${files.length})…`;
-          const r = await fetch(f.src);
-          const b = new Uint8Array(await r.arrayBuffer());
-          const name = f.src.match(/[^/]+$/)[0];
-          m.FS.mkdirTree(f.dst); m.FS.writeFile(`${f.dst}/${name}`, b);
-        }
-        stat.textContent = 'starting…';
-      } finally { m.removeRunDependency('fs'); }
-    }],
-  });
+// hudstate_t field offsets
+const HUD={health:0,maxhealth:4,armor:8,ammo:12,weapon:44,depth:48,kills:52,score:56,phase:60,choice:64,roomIndex:72,dmgFlash:76,mzFlash:80,alive:84,cleared:88,name:92};
+function readHud(){
+  const a=ex.g_hud.value|0, ammo=[];
+  for(let i=0;i<8;i++) ammo.push(memI32(a+HUD.ammo+i*4));
+  return { health:memI32(a+HUD.health), maxhealth:memI32(a+HUD.maxhealth), armor:memI32(a+HUD.armor),
+    ammo, weapon:memI32(a+HUD.weapon), depth:memF32(a+HUD.depth), kills:memI32(a+HUD.kills),
+    score:memI32(a+HUD.score), phase:memI32(a+HUD.phase),
+    choice:[memI32(a+HUD.choice),memI32(a+HUD.choice+4)], roomIndex:memI32(a+HUD.roomIndex),
+    dmgFlash:memF32(a+HUD.dmgFlash), mzFlash:memF32(a+HUD.mzFlash),
+    alive:memI32(a+HUD.alive), name:cstr(a+HUD.name) };
 }
-document.getElementById('go').addEventListener('click', () => { boot().catch(e=>{stat.textContent='ERR '+e.message; console.error(e);}); });
+
+// ---------- input ----------
+const keys={}; let mouse={x:0,y:0}, firing=false, aimYaw=0;
+addEventListener('keydown',e=>{
+  keys[e.code]=true;
+  if(e.code==='KeyR'){ startRun(rndSeed()); return; }
+  if(hud && hud.phase===1){ if(e.code==='Digit1')choose(0); if(e.code==='Digit2')choose(1); }
+  if(['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code)) e.preventDefault();
+});
+addEventListener('keyup',e=>{keys[e.code]=false;});
+cv.addEventListener('mousemove',e=>{ mouse.x=e.clientX; mouse.y=e.clientY; });
+cv.addEventListener('mousedown',e=>{ if(e.button===0) firing=true; });
+addEventListener('mouseup',e=>{ if(e.button===0) firing=false; });
+cv.addEventListener('contextmenu',e=>e.preventDefault());
+cv.addEventListener('touchstart',e=>{ firing=true; const t=e.touches[0]; mouse.x=t.clientX; mouse.y=t.clientY; e.preventDefault();},{passive:false});
+cv.addEventListener('touchmove',e=>{ const t=e.touches[0]; mouse.x=t.clientX; mouse.y=t.clientY; e.preventDefault();},{passive:false});
+cv.addEventListener('touchend',e=>{ firing=false; e.preventDefault();},{passive:false});
+
+// ---------- camera ----------
+const cam={x:0,y:0,scale:1};
+function computeCam(){
+  const base=Math.min(W,H)/WORLD;
+  cam.scale=base*2.7;
+  const visW=W/cam.scale, visH=H/cam.scale;
+  const px=ex.a3_player_x(), py=ex.a3_player_y();
+  let cx=px-visW/2, cy=py-visH/2;
+  const m=70;
+  cx=Math.max(-m,Math.min(WORLD-visW+m,cx));
+  cy=Math.max(-m,Math.min(WORLD-visH+m,cy));
+  if(visW>WORLD+2*m) cx=(WORLD-visW)/2;
+  if(visH>WORLD+2*m) cy=(WORLD-visH)/2;
+  cam.x=cx; cam.y=cy;
+}
+const S=x=>(x-cam.x)*cam.scale, T=y=>(y-cam.y)*cam.scale;
+
+// ---------- rendering ----------
+function drawRoom(h){
+  const cp=CELL*cam.scale;
+  ctx.fillStyle='#0a1016'; ctx.fillRect(0,0,W,H);
+  for(let row=0;row<ROOMH;row++)for(let col=0;col<ROOMW;col++){
+    const ch=ex.a3_grid_char(col,row), x=S(col*CELL), y=T(row*CELL);
+    if(ch==='#'){
+      ctx.fillStyle='#39424f'; ctx.fillRect(x,y,cp+1,cp+1);
+      ctx.fillStyle='#59647a'; ctx.fillRect(x,y,cp+1,Math.max(2,cp*0.3));
+      ctx.fillStyle='#232c38'; ctx.fillRect(x,y+cp-cp*0.16,cp+1,cp*0.16+1);
+      ctx.strokeStyle='rgba(0,0,0,.5)'; ctx.lineWidth=1; ctx.strokeRect(x+.5,y+.5,cp,cp);
+    } else {
+      ctx.fillStyle=((col+row)&1)?'#141d26':'#18222d';
+      ctx.fillRect(x,y,cp+1,cp+1);
+      ctx.strokeStyle='rgba(120,140,170,.09)'; ctx.lineWidth=1; ctx.strokeRect(x+.5,y+.5,cp,cp);
+    }
+  }
+  const now=performance.now();
+  for(let row=0;row<ROOMH;row++)for(let col=0;col<ROOMW;col++){
+    const ch=ex.a3_grid_char(col,row);
+    if(ch!=='1'&&ch!=='2') continue;
+    const k=ch-'1', x=S(col*CELL), y=T(row*CELL);
+    const pulse=0.55+0.45*Math.sin(now/300+k*1.7);
+    const g=ctx.createRadialGradient(x+cp/2,y+cp/2,1,x+cp/2,y+cp/2,cp*0.85);
+    g.addColorStop(0,'rgba(217,180,101,'+(0.55*pulse)+')'); g.addColorStop(1,'rgba(217,180,101,0)');
+    ctx.fillStyle=g; ctx.fillRect(x-cp*.4,y-cp*.4,cp*1.8,cp*1.8);
+    const nm=h.choice[k]!=null?cstr(ex.a3_upgrade_name(h.choice[k])):'';
+    ctx.save(); ctx.font='700 '+Math.max(9,cp*0.19)+'px ui-monospace,monospace';
+    ctx.fillStyle='#f4e6c0'; ctx.textAlign='center'; ctx.shadowColor='#000'; ctx.shadowBlur=4;
+    ctx.fillText((k+1)+': '+nm, x+cp/2, y-4); ctx.restore();
+  }
+}
+
+function drawEntities(h){
+  const n=ex.a3_max_ent(), px=ex.a3_player_x(), py=ex.a3_player_y();
+  for(let i=1;i<n;i++){
+    const t=ex.a3_entity_type(i); if(t===0) continue;
+    const sx=S(ex.a3_entity_x(i)), sy=T(ex.a3_entity_y(i)), r=ex.a3_entity_radius(i)*cam.scale;
+    if(sx<-90||sx>W+90||sy<-90||sy>H+90) continue;
+    if(t===2){
+      const cr=ex.a3_entity_color_r(i),cg=ex.a3_entity_color_g(i),cb=ex.a3_entity_color_b(i);
+      const hp=ex.a3_entity_hp(i), mhp=ex.a3_entity_maxhp(i)||1;
+      let g=ctx.createRadialGradient(sx,sy,r*0.2,sx,sy,r*2.2);
+      g.addColorStop(0,'rgba('+(cr*255|0)+','+(cg*255|0)+','+(cb*255|0)+',0.5)'); g.addColorStop(1,'rgba(0,0,0,0)');
+      ctx.fillStyle=g; ctx.beginPath(); ctx.arc(sx,sy,r*2.2,0,7); ctx.fill();
+      ctx.fillStyle='rgb('+(cr*255|0)+','+(cg*255|0)+','+(cb*255|0)+')';
+      ctx.beginPath(); ctx.arc(sx,sy,r,0,7); ctx.fill();
+      ctx.lineWidth=2; ctx.strokeStyle='rgba(0,0,0,.55)'; ctx.stroke();
+      const yaw=ex.a3_entity_yaw(i);
+      ctx.fillStyle='#0a0a0a'; ctx.beginPath();
+      ctx.arc(sx+Math.cos(yaw)*r*0.4,sy+Math.sin(yaw)*r*0.4,r*0.22,0,7); ctx.fill();
+      const bw=r*2.2, bx=sx-bw/2, by=sy-r-10, frac=Math.max(0,Math.min(1,hp/mhp));
+      ctx.fillStyle='rgba(0,0,0,.7)'; ctx.fillRect(bx-1,by-1,bw+2,5);
+      ctx.fillStyle=frac>0.5?'#7ec25a':frac>0.25?'#e0b84a':'#c0402a'; ctx.fillRect(bx,by,bw*frac,3);
+    } else if(t===3){
+      const cr=ex.a3_entity_color_r(i),cg=ex.a3_entity_color_g(i),cb=ex.a3_entity_color_b(i);
+      let g=ctx.createRadialGradient(sx,sy,0,sx,sy,r*3);
+      g.addColorStop(0,'rgba('+(cr*255|0)+','+(cg*255|0)+','+(cb*255|0)+',0.95)'); g.addColorStop(1,'rgba(0,0,0,0)');
+      ctx.fillStyle=g; ctx.beginPath(); ctx.arc(sx,sy,r*3,0,7); ctx.fill();
+      ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(sx,sy,Math.max(2,r*0.7),0,7); ctx.fill();
+    } else if(t===4){
+      ctx.save(); ctx.globalAlpha=0.4; ctx.fillStyle='#3a2c28';
+      ctx.beginPath(); ctx.arc(sx,sy,r*0.9,0,7); ctx.fill(); ctx.restore();
+    }
+  }
+  const pr=15*cam.scale, psx=S(px), psy=T(py);
+  let pg=ctx.createRadialGradient(psx,psy,0,psx,psy,pr*2.4);
+  pg.addColorStop(0,'rgba(120,190,255,0.4)'); pg.addColorStop(1,'rgba(0,0,0,0)');
+  ctx.fillStyle=pg; ctx.beginPath(); ctx.arc(psx,psy,pr*2.4,0,7); ctx.fill();
+  const yaw=ex.a3_player_yaw()||0;
+  ctx.strokeStyle='#c9d4e0'; ctx.lineWidth=Math.max(3,pr*0.45); ctx.lineCap='round';
+  ctx.beginPath(); ctx.moveTo(psx,psy); ctx.lineTo(psx+Math.cos(yaw)*pr*1.7,psy+Math.sin(yaw)*pr*1.7); ctx.stroke();
+  if(h.mzFlash>0){
+    ctx.fillStyle='rgba(255,230,150,'+Math.min(1,h.mzFlash*18)+')';
+    ctx.beginPath(); ctx.arc(psx+Math.cos(yaw)*pr*2.2,psy+Math.sin(yaw)*pr*2.2,pr*1.1,0,7); ctx.fill();
+  }
+  ctx.fillStyle='#e8e2d4'; ctx.beginPath(); ctx.arc(psx,psy,pr,0,7); ctx.fill();
+  ctx.lineWidth=3; ctx.strokeStyle='#5a7fa8'; ctx.stroke();
+}
+
+function drawCrosshair(){
+  ctx.strokeStyle='rgba(232,226,212,.85)'; ctx.lineWidth=2; const g=7;
+  ctx.beginPath();
+  ctx.moveTo(mouse.x-g,mouse.y); ctx.lineTo(mouse.x-2,mouse.y);
+  ctx.moveTo(mouse.x+2,mouse.y); ctx.lineTo(mouse.x+g,mouse.y);
+  ctx.moveTo(mouse.x,mouse.y-g); ctx.lineTo(mouse.x,mouse.y-2);
+  ctx.moveTo(mouse.x,mouse.y+2); ctx.lineTo(mouse.x,mouse.y+g);
+  ctx.stroke();
+}
+function drawVignette(h){
+  if(h.dmgFlash>0.01){
+    const a=Math.min(0.55,h.dmgFlash);
+    let g=ctx.createRadialGradient(W/2,H/2,Math.min(W,H)*0.25,W/2,H/2,Math.max(W,H)*0.7);
+    g.addColorStop(0,'rgba(192,64,42,0)'); g.addColorStop(1,'rgba(192,64,42,'+a+')');
+    ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+  }
+  let g2=ctx.createRadialGradient(W/2,H/2,Math.min(W,H)*0.35,W/2,H/2,Math.max(W,H)*0.75);
+  g2.addColorStop(0,'rgba(0,0,0,0)'); g2.addColorStop(1,'rgba(0,0,0,.55)');
+  ctx.fillStyle=g2; ctx.fillRect(0,0,W,H);
+}
+
+// ---------- HUD DOM ----------
+const $=id=>document.getElementById(id);
+const WEP_AMMO=[-1,0,1,2,3,4,5,6,7]; // gauntlet..bfg -> AM_*
+function updateHud(h){
+  $('hp').textContent=h.health; $('hpm').textContent=h.maxhealth;
+  $('hpbar').style.width=Math.max(0,Math.min(100,h.health/Math.max(1,h.maxhealth)*100))+'%';
+  $('ar').textContent=h.armor;
+  $('arbar').style.width=Math.max(0,Math.min(100,h.armor/200*100))+'%';
+  $('wep').textContent=cstr(ex.a3_weapon_name(h.weapon));
+  const at=WEP_AMMO[h.weapon], idx=at<0?0:at;
+  $('ammo').textContent=h.weapon===0?'∞':h.ammo[idx];
+  $('ammoname').textContent=h.weapon===0?'MELEE':cstr(ex.a3_ammo_name(idx));
+  $('roomname').textContent=h.name;
+  $('depth').textContent=Math.round(h.depth);
+  $('kills').textContent=h.kills; $('score').textContent=h.score; $('alive').textContent=h.alive;
+  $('cleared').textContent=Math.min(VICTORY,Math.round(h.depth)+1);
+}
+
+// ---------- overlays ----------
+function show(id,on){ $(id).classList.toggle('show',on); }
+function buildCards(h){
+  const box=$('cards'); box.innerHTML='';
+  for(let k=0;k<2;k++){
+    const up=h.choice[k], el=document.createElement('div'); el.className='card';
+    const nm=up!=null?cstr(ex.a3_upgrade_name(up)):'?';
+    const ds=up!=null?cstr(ex.a3_upgrade_desc(up)):'';
+    el.innerHTML='<div class="k">Door '+(k+1)+'</div><div class="n">'+nm+'</div><div class="d">'+ds+'</div><div class="hint">press '+(k+1)+'</div>';
+    el.addEventListener('click',()=>choose(k)); box.appendChild(el);
+  }
+}
+function choose(k){ if(!ex)return; ex.g_choose(k); show('ovchoose',false); }
+$('btnstart').addEventListener('click',()=>{ show('ovstart',false); startRun(rndSeed()); });
+$('btndead').addEventListener('click',()=>{ show('ovdead',false); startRun(rndSeed()); });
+$('btnwin').addEventListener('click',()=>{ show('ovwin',false); startRun(rndSeed()); });
+const rndSeed=()=>Math.floor(Math.random()*1e9);
+
+function startRun(seed){
+  show('ovdead',false); show('ovwin',false); show('ovchoose',false);
+  ex.g_start_run(seed>>>0); ex.g_fill_hud(ex.g_game.value); lastPhase=-1;
+}
+
+// ---------- main loop ----------
+let hud=null, lastPhase=-1, acc=0, last=performance.now();
+let AUTO=false, lastFrameTime=performance.now();
+const STEP=1/60;
+function frame(now){
+  requestAnimationFrame(frame);
+  if(!ex) return;
+  lastFrameTime=performance.now();
+  let dt=(now-last)/1000; last=now; if(dt>0.1)dt=0.1;
+  computeCam();
+  const h=readHud();
+  const psx=S(ex.a3_player_x()), psy=T(ex.a3_player_y());
+  aimYaw=Math.atan2(mouse.y-psy, mouse.x-psx);
+  if(AUTO){
+    const n=ex.a3_max_ent(); let best=-1, bd=1e18;
+    for(let i=1;i<n;i++){ if(ex.a3_entity_type(i)===2){
+      const dx=ex.a3_entity_x(i)-ex.a3_player_x(), dy=ex.a3_entity_y(i)-ex.a3_player_y(), d=dx*dx+dy*dy;
+      if(d<bd){bd=d;best=i;} } }
+    if(best>=0){ mouse.x=S(ex.a3_entity_x(best)); mouse.y=T(ex.a3_entity_y(best)); firing=true; }
+    else firing=false;
+  }
+  aimYaw=Math.atan2(mouse.y-T(ex.a3_player_y()), mouse.x-S(ex.a3_player_x()));
+  // command (used for movement in FIGHT and walking into doors in CHOOSE)
+  const fwd=(keys['KeyW']||keys['ArrowUp']?1:0)-(keys['KeyS']||keys['ArrowDown']?1:0);
+  const rgt=(keys['KeyA']||keys['ArrowLeft']?1:0)-(keys['KeyD']||keys['ArrowRight']?1:0);
+  const cp=ex.a3_cmd_ptr();
+  DV.setInt32(cp+0,fwd,true); DV.setInt32(cp+4,rgt,true); DV.setInt32(cp+8,0,true);
+  DV.setFloat32(cp+12,aimYaw,true); DV.setFloat32(cp+16,0,true);
+  DV.setInt32(cp+20,(firing||keys['Space'])?1:0,true); DV.setInt32(cp+24,0,true); DV.setInt32(cp+28,0,true);
+  acc+=dt; let n=0;
+  while(acc>=STEP && n<5){ ex.a3_step(STEP); acc-=STEP; n++; }
+  const h2=readHud();
+  if(h2.phase!==lastPhase){
+    if(h2.phase===1){ buildCards(h2); show('ovchoose',true); if(AUTO) setTimeout(()=>choose(Math.random()<0.5?0:1),200); }
+    if(h2.phase===2){ if(AUTO) setTimeout(()=>startRun(rndSeed()),400); $('deadstats').textContent='You reached room '+(Math.round(h2.depth)+1)+' with '+h2.kills+' kills and '+h2.score+' score.'; show('ovdead',true); }
+    if(h2.phase===3){ if(AUTO) setTimeout(()=>startRun(rndSeed()),400); $('winstats').textContent='Arena cleared! '+h2.kills+' kills, '+h2.score+' score.'; show('ovwin',true); }
+    if(h2.phase===0){ show('ovchoose',false); }
+    lastPhase=h2.phase;
+  }
+  hud=h2;
+  ctx.clearRect(0,0,W,H);
+  drawRoom(h2); drawEntities(h2); drawVignette(h2); drawCrosshair();
+  updateHud(h2);
+}
+function resize(){
+  DPR=Math.min(2,window.devicePixelRatio||1);
+  W=cv.clientWidth; H=cv.clientHeight;
+  cv.width=W*DPR; cv.height=H*DPR; ctx.setTransform(DPR,0,0,DPR,0,0);
+}
+addEventListener('resize',resize);
+// Watchdog: keep the sim alive if rAF is starved (headless, background tabs).
+setInterval(()=>{ if(!ex) return; const t=performance.now();
+  if(t-lastFrameTime>120){ frame(t); } }, 100);
+
+(async function(){
+  resize();
+  const bytes=await (await fetch('arena3.wasm',{cache:'no-cache'})).arrayBuffer();
+  const mod=await WebAssembly.instantiate(bytes,{});
+  ex=mod.instance.exports; mem=ex.memory; DV=new DataView(mem.buffer);
+  ex.g_start_run(12345); ex.g_fill_hud(ex.g_game.value);
+  AUTO=/[?&]auto\b/.test(location.search);
+  if(AUTO){ show('ovstart',false); startRun(42); }
+  requestAnimationFrame(frame);
+})();
 </script>
 </body>
 </html>
