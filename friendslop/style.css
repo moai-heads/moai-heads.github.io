@@ -109,3 +109,17 @@ footer{padding:34px 0 60px;color:var(--faint);font-size:12px}
 footer a{color:var(--dim)}
 .muted{color:var(--dim)}
 .small{font-size:12px}
+
+/* ---- play mode: click-to-play overlay, reticle hint ---- */
+.playoverlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  background:rgba(4,6,9,.55);backdrop-filter:blur(2px);cursor:pointer;z-index:3}
+.playoverlay .pcard{text-align:center;padding:18px 26px;border:1px solid var(--amber);
+  border-radius:10px;background:rgba(12,14,18,.92)}
+.playoverlay .ptitle{color:var(--amber);font-weight:700;letter-spacing:.24em;font-size:16px;margin-bottom:8px}
+.playoverlay .pkeys{color:var(--dim);font-size:12px}
+.hint{position:absolute;left:0;right:0;bottom:12px;text-align:center;color:var(--amber);
+  font-size:13px;letter-spacing:.06em;pointer-events:none;text-shadow:0 1px 3px #000;
+  opacity:0;transition:opacity .15s;z-index:4}
+.hint{color:#ffd27f}
+#classRow .btn,#camRow .btn{padding:7px 12px;font-size:12px}
+.stagebar .btn.ctl.primary{background:var(--amber);color:#131313;border-color:var(--amber);font-weight:700}
