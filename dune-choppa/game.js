@@ -106,7 +106,7 @@
   // Double source resolution but keep the same 640x360 display footprint.
   // At 2x nearest-neighbour, terrain features read as pixel-art sprites.
   const IW = 320, IH = 180;
-  const ICOL = [[26,48,84],[40,86,132],[220,196,134],[120,164,88],[74,116,62],[132,120,106],[230,232,238]];
+  const ICOL = [[19,43,77],[42,92,122],[224,203,153],[205,174,113],[183,148,93],[142,125,100],[199,187,159]];
   const REGION_NAMES = ['SALT FLAT','DUNE BASIN','THE RIDGE','OASIS','OLD HARBOR','BLACK MESA'];
   const REGION_TERRAIN = ['coastal','desert','ridge','oasis','harbor','mesa'];
   let islCanvas = null;
@@ -164,9 +164,12 @@
       if (ci <= 1) {
         const wave = Math.sin(x * 0.18 + y * 0.12 + vnoise(x * 0.035, y * 0.035 + seed) * 4.5);
         detail += wave > 0.78 ? 5 : 0;
-      } else if (ci === 2) detail += Math.sin(x * 0.31 + y * 0.10 + patch * 0.08) * 4;
-      else if (ci === 5) detail += Math.sin(x * 0.43 + y * 0.20 + patch * 0.1) * 3;
-      else if (ci === 6 && ihash(x + 1701, y + 5309) > 0.93) detail += 12;
+      } else if (ci >= 2 && ci <= 4) {
+        // Long, irregular dune ridges: pale sunward crests, warmer troughs.
+        const dune = Math.sin(x * 0.11 + y * 0.072 + vnoise(x * 0.028 + seed, y * 0.028) * 2.7);
+        detail += dune * (ci === 2 ? 3 : 6) + (dune > 0.72 ? 4 : 0);
+      } else if (ci === 5) detail += Math.sin(x * 0.43 + y * 0.20 + patch * 0.1) * 4;
+      else if (ci === 6 && ihash(x + 1701, y + 5309) > 0.93) detail += 7;
       const light = ci <= 1 ? 1 : Math.max(0.78, Math.min(1.18, shade));
       dat[o] = Math.max(0, Math.min(255, base[0] * light + detail));
       dat[o + 1] = Math.max(0, Math.min(255, base[1] * light + detail));
@@ -247,36 +250,74 @@
       if (river[i]) paint(i % IW, (i / IW) | 0, ihash(i + 703, 119) > 0.68 ? [90,161,176] : [50,119,151]);
     }
 
-    // Tiny clustered hardwoods: dark pixel-art canopy, bright leaves, one-pixel trunk.
-    const treeShape = [
-      [0,-2,2], [-1,-1,1],[0,-1,0],[1,-1,2],
-      [-2,0,2],[-1,0,0],[0,0,0],[1,0,1],[2,0,2],
-      [-2,1,2],[-1,1,0],[0,1,1],[1,1,0],[2,1,2],
-      [-1,2,2],[0,2,3],[1,2,2]
-    ];
-    const treePal = [
-      [[52,112,51],[35,75,44],[113,160,67],[111,83,54]],
-      [[61,126,56],[39,83,47],[133,173,72],[116,88,56]],
-      [[48,101,58],[32,69,49],[100,149,74],[109,82,57]]
-    ];
-    for (let gy = 5; gy < IH - 4; gy += 5) for (let gx = 5; gx < IW - 4; gx += 5) {
-      const j = gy * IW + gx;
-      if (heights[j] < 0.52 || heights[j] > 0.75) continue;
-      const forestness = vnoise(gx * 0.055 + seed * 2.7, gy * 0.055 + seed * 1.9);
-      if (forestness < 0.43 || ihash(gx + 612, gy + 143) < 0.22) continue;
-      const tx = gx + ((ihash(gx + 201, gy + 379) * 3) | 0) - 1;
-      const ty = gy + ((ihash(gx + 503, gy + 887) * 3) | 0) - 1;
-      const pal = treePal[(ihash(gx + 71, gy + 31) * treePal.length) | 0];
-      for (const [dx, dy, c] of treeShape) {
-        const x = tx + dx, y = ty + dy;
+    // Sparse oasis patches: the land stays overwhelmingly sand and rock, with
+    // a few irrigated green pockets and spring pools near inland lowlands.
+    const oasis = new Uint8Array(count), oasisCenters = [];
+    for (let patchIndex = 0; patchIndex < 3; patchIndex++) {
+      let bestCell = -1, bestScore = -1;
+      for (let i = 0; i < count; i++) {
+        const h = heights[i], cd = coastDist[i];
+        if (h < 0.48 || h > 0.67 || cd < 7 || cd > 48) continue;
+        const x = i % IW, y = (i / IW) | 0;
+        let separated = true;
+        for (const q of oasisCenters) if (Math.abs(q.x - x) < 28 && Math.abs(q.y - y) < 20) { separated = false; break; }
+        if (!separated) continue;
+        const score = ihash(x * 17 + patchIndex * 977, y * 23 + 419) + Math.min(cd, 30) * 0.001;
+        if (score > bestScore) { bestScore = score; bestCell = i; }
+      }
+      if (bestCell < 0) continue;
+      const ox = bestCell % IW, oy = (bestCell / IW) | 0;
+      oasisCenters.push({ x: ox, y: oy });
+      const rx = 6 + ((ihash(ox + 151, oy + 77) * 3) | 0);
+      const ry = 4 + ((ihash(ox + 19, oy + 293) * 2) | 0);
+      for (let y = oy - ry; y <= oy + ry; y++) for (let x = ox - rx; x <= ox + rx; x++) {
         if (x < 0 || y < 0 || x >= IW || y >= IH) continue;
-        const k = y * IW + x;
-        if (!landMask[k] || river[k] || bank[k]) continue;
-        paint(x, y, pal[c]);
+        const dx = (x - ox) / rx, dy = (y - oy) / ry, d2 = dx * dx + dy * dy;
+        const i = y * IW + x;
+        if (d2 > 1 || !landMask[i]) continue;
+        if (d2 < 0.10) { oasis[i] = 2; paint(x, y, [72,129,142]); }  // spring pool
+        else {
+          oasis[i] = 1;
+          const green = d2 < 0.48 ? [110,130,74] : [145,145,91];
+          paint(x, y, green);
+        }
       }
     }
 
-    // Sparse rocky tors and snow caps break up high ground into landmarks.
+    // Date palms clustered around the oasis pockets. Fronds and trunks are
+    // hand-built in the pixel buffer; the surrounding dunes remain sparsely vegetated.
+    const palmShape = [
+      [0,-4,1], [-2,-3,1],[-1,-3,2],[0,-3,0],[1,-3,2],[2,-3,1],
+      [-3,-2,1],[-2,-2,2],[-1,-2,0],[0,-2,0],[1,-2,0],[2,-2,2],[3,-2,1],
+      [-1,-1,1],[0,-1,2],[1,-1,1], [0,0,4],[0,1,4],[0,2,4]
+    ];
+    const palmPal = [[99,135,66],[42,76,46],[70,105,54],[57,91,50],[137,105,64]];
+    for (let gy = 4; gy < IH - 4; gy += 3) for (let gx = 4; gx < IW - 4; gx += 3) {
+      const j = gy * IW + gx;
+      if (oasis[j] !== 1 || ihash(gx + 309, gy + 771) < 0.48) continue;
+      const tx = gx + ((ihash(gx + 110, gy + 93) * 3) | 0) - 1;
+      const ty = gy + ((ihash(gx + 257, gy + 37) * 3) | 0) - 1;
+      for (const [dx, dy, c] of palmShape) {
+        const x = tx + dx, y = ty + dy;
+        if (x < 0 || y < 0 || x >= IW || y >= IH) continue;
+        const k = y * IW + x;
+        if (!landMask[k] || river[k] || oasis[k] === 2) continue;
+        paint(x, y, palmPal[c]);
+      }
+    }
+
+    // Small olive scrub tufts break up the open sand without turning it into forest.
+    for (let gy = 6; gy < IH - 5; gy += 5) for (let gx = 6; gx < IW - 5; gx += 5) {
+      const j = gy * IW + gx;
+      if (heights[j] < 0.48 || heights[j] > 0.70 || oasis[j] || river[j] || bank[j]) continue;
+      if (ihash(gx * 3 + 731, gy * 5 + 193) < 0.94) continue;
+      for (const [dx, dy, col] of [[0,0,[128,125,72]],[1,0,[158,139,83]],[-1,1,[117,119,73]]]) {
+        const x = gx + dx, y = gy + dy, k = y * IW + x;
+        if (landMask[k] && !oasis[k]) paint(x, y, col);
+      }
+    }
+
+    // Sparse rocky tors and sunlit limestone caps break up high ground into landmarks.
     for (let gy = 8; gy < IH - 7; gy += 9) for (let gx = 8; gx < IW - 7; gx += 10) {
       const cxp = gx + ((ihash(gx + 77, gy + 91) * 5) | 0) - 2;
       const cyp = gy + ((ihash(gx + 31, gy + 53) * 5) | 0) - 2;
@@ -290,10 +331,10 @@
           const k = y * IW + x;
           if (!landMask[k] || river[k] || bank[k]) continue;
           let col;
-          if (dy <= -2 && Math.abs(dx) <= 1) col = heights[k] > 0.80 ? [228,226,212] : [184,178,151];
-          else if (dx + dy < 0) col = [157,155,139];
-          else col = [91,98,91];
-          if (heights[k] > 0.80 && ihash(x + 661, y + 71) > 0.44) col = [222,226,224];
+          if (dy <= -2 && Math.abs(dx) <= 1) col = heights[k] > 0.80 ? [216,198,160] : [188,165,125];
+          else if (dx + dy < 0) col = [158,139,105];
+          else col = [91,82,68];
+          if (heights[k] > 0.80 && ihash(x + 661, y + 71) > 0.44) col = [224,205,166];
           paint(x, y, col);
         }
       }
