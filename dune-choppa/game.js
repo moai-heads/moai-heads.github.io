@@ -18,10 +18,8 @@
     keys[e.code] = true;
     if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code)) e.preventDefault();
     if (state.phase === 'build') {
-      if (e.code === 'Digit1' || e.code === 'Digit2' || e.code === 'Digit3' || e.code === 'Digit4') buildAtRegion(DEF_ORDER[(+e.code.slice(5)) - 1]);
-      if (e.code === 'ArrowLeft' && REGIONS.length) state.region = (state.region + REGIONS.length - 1) % REGIONS.length;
-      if (e.code === 'ArrowRight' && REGIONS.length) state.region = (state.region + 1) % REGIONS.length;
-      if (e.code === 'Space' || e.code === 'Enter' || e.code === 'NumpadEnter') { startWave(); e.preventDefault(); }
+      stratKey(e.code);
+      if (['Space','Enter','NumpadEnter','Digit1','Digit2','Digit3'].includes(e.code)) e.preventDefault();
     }
     if (e.code === 'KeyR' && state.over) reset();
     if (e.code === 'KeyB') wantBomb = true;
@@ -83,7 +81,8 @@
     bombs.length = 0; booms.length = 0; wantBomb = false;
     structs.length = 0; genX = 900;
     missiles.length = 0; floaters.length = 0;
-    for (let i = 0; i < 5; i++) spawnEnemy(360 + i * 260);
+    enemies.length = 0;
+    islCanvas = null; buildIsland(); stratInit();
   }
   const enemies = [], bullets = [], ebullets = [], parts = [];
   const bombs = [], booms = [];
@@ -124,6 +123,7 @@
   const REGION_NAMES = ['SALT FLAT','DUNE BASIN','THE RIDGE','OASIS','OLD HARBOR','BLACK MESA'];
   const REGION_TERRAIN = ['coastal','desert','ridge','oasis','harbor','mesa'];
   let islCanvas = null;
+  let islSeed = 0;
   // the campaign map is a SINGLE pixel buffer: terrain with roads and the
   // growing city baked straight into it, so what you develop IS the map.
   let mapData = null, mapCanvas = null;
@@ -356,6 +356,7 @@
 
     cx.putImageData(img, 0, 0);
     islCanvas = c;
+    islSeed = seed;
     mapData = new Uint8ClampedArray(img.data);
     mapCanvas = null; cityDirty = true;
     for (let t = 0; t < 6000 && REGIONS.length < 6; t++) {
@@ -780,6 +781,695 @@
     state.scrap -= cost; r.structs.push({ kind, level: 1 }); BASE.push({ region: state.region, kind, level: 1 });
   }
 
+  // ============================ STRATEGY (Avianos-like) ============================
+  // Turn-based board game layered over the island: pick an ancestor each turn,
+  // it grants 3 actions (produce / build / recruit / move / muster / trade /
+  // miracle), claim ground and fight over flags. Meeting an enemy army launches
+  // the gunship battle to resolve the tile in real time.
+  const GX = 6, GY = 4;                       // board: 6 x 4 tiles
+  const FW = 0, FR = 1;                       // faction ids: you, red
+  const FNAME = ['YOU', 'CRIMSON'];
+  const FCOL = ['#8fffa8', '#ff6b5a'];
+  const ANC = [
+    { name: 'REXADON', col: '#ff8a4c', acts: ['produce', 'recruit', 'move'] },
+    { name: 'STEGNAR', col: '#8fffa8', acts: ['move', 'build', 'recruit'] },
+    { name: 'BRONTOR', col: '#7fd0ff', acts: ['produce', 'build', 'miracle'] },
+    { name: 'QUETZAL', col: '#c9a6ff', acts: ['muster', 'move', 'trade'] },
+    { name: 'TRILOCK', col: '#ffd27a', acts: ['produce', 'recruit', 'miracle'] },
+  ];
+  const UNAME = { soldier: 'SOLDIER', archer: 'ARCHER', knight: 'KNIGHT', priest: 'PRIEST', bomber: 'BOMBER' };
+  const UCOST = { soldier: 4, archer: 6, knight: 8, priest: 8, bomber: 10 };
+  const BLD = {
+    seed:    { name: 'SEED FACTORY', cost: 2 },
+    nest:    { name: 'MILITARY NEST', cost: 3 },
+    worship: { name: 'HOUSE OF WORSHIP', cost: 3 },
+    bath:    { name: 'WORKER BATH', cost: 4 },
+  };
+  const BLD_K = ['seed', 'nest', 'worship', 'bath'];
+  const UNIT_K = ['soldier', 'archer', 'knight', 'priest', 'bomber'];
+  const ENEMY_SPEC = {
+    soldier: { hp: 2, kind: 'raider', name: 'DODO' },
+    archer:  { hp: 2, kind: 'gunner', name: 'ARCHER' },
+    knight:  { hp: 4, kind: 'gunner', name: 'KNIGHT' },
+    priest:  { hp: 3, kind: 'thrower', name: 'PRIEST' },
+    bomber:  { hp: 3, kind: 'thrower', name: 'BOMBER' },
+  };
+  const TCOL = { grass: '#5f7f46', forest: '#3d6238', fossil: '#a8915f', mountain: '#7f868f' };
+  const TNAME = { grass: 'GRASS', forest: 'FOREST', fossil: 'FOSSIL', mountain: 'MOUNTAIN' };
+  const STR = {
+    ready: false, tiles: [], N: 0,
+    turn: 0, round: 1, stage: 'pick', avail: [], anc: -1, actIdx: 0,
+    armed: null, sel: -1, sel2: -1, kind: 'seed', ukind: 'soldier', mirakind: 'lightning',
+    res: [{ seed: 0, worker: 0, bone: 0 }, { seed: 0, worker: 0, bone: 0 }],
+    favor: [0, 0], hold: [0, 0], over: false, win: false,
+    msg: '', msgT: 0, aiT: 0, battle: null, spawned: 0, clearT: 0,
+    log: [],
+  };
+  function stratMsg(t) { STR.msg = t; STR.msgT = 2.2; STR.log.push(t); if (STR.log.length > 5) STR.log.shift(); }
+
+  function landBBox() {
+    let x0 = IW, y0 = IH, x1 = 0, y1 = 0, any = false;
+    for (let y = 0; y < IH; y++) for (let x = 0; x < IW; x++) if (landMask[y * IW + x]) {
+      any = true; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+    }
+    if (!any) return { x0: 40, y0: 30, x1: IW - 40, y1: IH - 30 };
+    return { x0, y0, x1, y1 };
+  }
+  function nearestLand(px, py, rad) {
+    if (landAt(px, py)) return { x: px, y: py };
+    for (let r = 1; r <= rad; r++) {
+      for (let a = 0; a < 16; a++) {
+        const ang = a / 16 * 6.283;
+        const x = Math.round(px + Math.cos(ang) * r), y = Math.round(py + Math.sin(ang) * r);
+        if (landAt(x, y)) return { x, y };
+      }
+    }
+    return null;
+  }
+  function buildBoard() {
+    STR.tiles.length = 0;
+    const bb = landBBox();
+    const cw = (bb.x1 - bb.x0) / GX, ch = (bb.y1 - bb.y0) / GY;
+    for (let r = 0; r < GY; r++) for (let c = 0; c < GX; c++) {
+      const cx = bb.x0 + (c + 0.5) * cw, cy = bb.y0 + (r + 0.5) * ch;
+      const pos = nearestLand(Math.round(cx), Math.round(cy), Math.round(Math.min(cw, ch) * 0.6));
+      if (!pos) continue;
+      const h = islandH(pos.x / IW, pos.y / IH, islSeed);
+      let terr = 'grass';
+      if (h < 0.46) terr = 'grass'; else if (h < 0.56) terr = 'forest';
+      else if (h < 0.66) terr = 'fossil'; else terr = 'mountain';
+      STR.tiles.push({ c, r, px: pos.x, py: pos.y, terr, owner: -1,
+                       units: { soldier: 0, archer: 0, knight: 0, priest: 0, bomber: 0 },
+                       blds: { seed: 0, nest: 0, worship: 0, bath: 0 },
+                       res: null, flag: false, castle: -1, frozen: 0 });
+    }
+    STR.N = STR.tiles.length;
+    // resource caches on neutral ground
+    for (const t of STR.tiles) {
+      const roll = ihash(t.px * 7 + 13, t.py * 11 + 5);
+      if (t.terr === 'grass') t.res = { kind: 'worker', n: 3 };
+      else if (t.terr === 'forest') t.res = { kind: 'seed', n: 12 };
+      else if (t.terr === 'fossil') t.res = { kind: 'bone', n: 4 };
+      else t.res = { kind: roll < 0.5 ? 'seed' : 'bone', n: roll < 0.5 ? 12 : 4 };
+      if (roll > 0.88) t.res = null;
+    }
+    if (!STR.N) { STR.ready = false; return; }
+    // castles: you on the left edge, the enemy on the right edge
+    const sorted = STR.tiles.slice().sort((a, b) => a.px - b.px);
+    const pCast = sorted[0], aCast = sorted[sorted.length - 1];
+    pCast.castle = FW; pCast.owner = FW; pCast.res = null;
+    aCast.castle = FR; aCast.owner = FR; aCast.res = null;
+    for (const t of [pCast, aCast]) { t.units.soldier = 2; t.blds.seed = 1; t.blds.nest = 1; }
+    // six flags spread over the non-castle tiles
+    const pool = STR.tiles.filter(t => t.castle < 0).sort((a, b) => (a.px + a.py * 0.4) - (b.px + b.py * 0.4));
+    let placed = 0;
+    for (let k = 0; k < 6 && pool.length; k++) {
+      const idx = Math.min(pool.length - 1, Math.round((k + 0.5) / 6 * pool.length));
+      const t = pool[idx]; if (!t || t.flag) continue;
+      t.flag = true; placed++;
+    }
+    for (const t of pool) { if (placed >= 6) break; if (!t.flag) { t.flag = true; placed++; } }
+    STR.ready = true;
+  }
+  function tileAtScreen(x, y) {
+    const M = mapRect();
+    for (let i = 0; i < STR.N; i++) {
+      const t = STR.tiles[i], sx = M.ox + t.px * M.s, sy = M.oy + t.py * M.s;
+      if (Math.hypot(x - sx, y - sy) < 20) return i;
+    }
+    return -1;
+  }
+  function tileAtIsl(ix, iy) {
+    let best = -1, bd = 1e9;
+    for (let i = 0; i < STR.N; i++) {
+      const t = STR.tiles[i], d = Math.hypot(t.px - ix, t.py - iy);
+      if (d < bd) { bd = d; best = i; }
+    }
+    return bd < 40 ? best : -1;
+  }
+  function tAdj(a, b) {
+    const ta = STR.tiles[a], tb = STR.tiles[b]; if (!ta || !tb) return false;
+    return Math.abs(ta.c - tb.c) <= 1 && Math.abs(ta.r - tb.r) <= 1 && (ta.c !== tb.c || ta.r !== tb.r);
+  }
+  function armyCount(t) { let n = 0; for (const k of UNIT_K) n += t.units[k]; return n; }
+  function armyStr(t) { return t.units.soldier + t.units.archer * 1.2 + t.units.knight * 1.8 + t.units.priest * 1.5 + t.units.bomber * 1.6; }
+  function bldCount(f, k) { let n = 0; for (const t of STR.tiles) if (t.owner === f) n += t.blds[k]; return n; }
+  function flagCount(f) { let n = 0; for (const t of STR.tiles) if (t.flag && t.owner === f) n++; return n; }
+  function tilesOf(f) { return STR.tiles.filter(t => t.owner === f); }
+  function castleOf(f) { return STR.tiles.find(t => t.castle === f) || null; }
+
+  function stratInit() {
+    STR.turn = 0; STR.round = 1; STR.stage = 'pick'; STR.anc = -1; STR.actIdx = 0;
+    STR.armed = null; STR.sel = -1; STR.sel2 = -1; STR.over = false; STR.win = false;
+    STR.res = [{ seed: 0, worker: 0, bone: 0 }, { seed: 0, worker: 0, bone: 0 }];
+    STR.favor = [0, 0]; STR.hold = [0, 0]; STR.battle = null; STR.spawned = 0; STR.clearT = 0;
+    STR.msg = ''; STR.msgT = 0; STR.aiT = 0; STR.log.length = 0;
+    buildBoard();
+    STR.avail = pickAvail(0, true, true);
+    stratMsg('PRAY TO AN ANCESTOR');
+  }
+  // ancestors on cooldown for two turns: keep it simple with a rotating offer
+  const ancCd = [0, 0, 0, 0, 0];
+  function pickAvail(round, isPlayer, first) {
+    const out = [];
+    for (let i = 0; i < ANC.length; i++) if (ancCd[i] <= 0) out.push(i);
+    while (out.length < 3) for (let i = 0; i < ANC.length; i++) if (out.indexOf(i) < 0) out.push(i);
+    // shuffle
+    for (let i = out.length - 1; i > 0; i--) { const j = (crand() * (i + 1)) | 0; const tmp = out[i]; out[i] = out[j]; out[j] = tmp; }
+    return out.slice(0, 3);
+  }
+  function tickAncCd() { for (let i = 0; i < ANC.length; i++) if (ancCd[i] > 0) ancCd[i]--; }
+  function pray(f, ai) {
+    STR.anc = ai; ancCd[ai] = 2;
+    STR.actIdx = 0; STR.stage = 'act'; STR.armed = null; STR.sel = -1; STR.sel2 = -1;
+    STR.favor[f]++;
+    stratMsg((f === FW ? 'YOU PRAY TO ' : 'CRIMSON PRAYS TO ') + ANC[ai].name);
+    if (STR.turn === FR) STR.aiT = 0.9;
+  }
+  function actName(a) { return a.toUpperCase(); }
+  function curAct() { return STR.anc >= 0 ? ANC[STR.anc].acts[STR.actIdx] : null; }
+  function skipAct() { STR.armed = null; STR.sel = -1; STR.sel2 = -1; STR.actIdx++; endTurnIfDone(); }
+  function endTurnIfDone() {
+    if (STR.actIdx >= 3) {
+      STR.armed = null; STR.sel = -1; STR.sel2 = -1;
+      if (STR.turn === FW) { STR.turn = FR; STR.stage = 'pick'; STR.aiT = 0.7; }
+      else { endRound(); }
+    }
+  }
+  function endRound() {
+    tickAncCd();
+    STR.round++;
+    // flag control: hold >= 4 flags for 2 rounds -> win
+    for (let f = 0; f < 2; f++) {
+      if (flagCount(f) >= 4) STR.hold[f]++; else STR.hold[f] = 0;
+    }
+    if (!STR.over) {
+      if (STR.hold[FW] >= 2) { STR.over = true; STR.win = true; return; }
+      if (STR.hold[FR] >= 2) { STR.over = true; STR.win = false; return; }
+      if (!castleOf(FW)) { STR.over = true; STR.win = false; return; }
+    }
+    // enemy armies slowly grow at their nests each round
+    for (const t of STR.tiles) if (t.owner === FR && t.blds.nest > 0 && armyCount(t) < 8) t.units.soldier += 1;
+    STR.turn = FW; STR.stage = 'pick'; STR.avail = pickAvail(STR.round, true, false); STR.anc = -1;
+    stratMsg('ROUND ' + STR.round + ' // PRAY');
+  }
+  // ---- action execution ----
+  function pay(f, cost) {
+    const r = STR.res[f];
+    for (const k in cost) if ((r[k] || 0) < cost[k]) return false;
+    for (const k in cost) r[k] -= cost[k];
+    return true;
+  }
+  function gain(f, gain) { const r = STR.res[f]; for (const k in gain) r[k] = Math.min(k === 'seed' ? 99 : 9, (r[k] || 0) + gain[k]); }
+
+  function actProduce(f, ai) {
+    const g = { seed: 10, worker: 0, bone: 0 };
+    g.seed += 3 * bldCount(f, 'seed');
+    g.worker += 1 * bldCount(f, 'bath');
+    g.bone += 1 * bldCount(f, 'worship');
+    gain(f, g);
+    stratMsg(actPrefix(f) + 'PRODUCE +' + g.seed + ' SEED' + (g.worker ? ' +' + g.worker + ' WRK' : '') + (g.bone ? ' +' + g.bone + ' BONE' : ''));
+  }
+  function actMuster(f, ai) {
+    const nests = tilesOf(f).filter(t => t.blds.nest > 0);
+    if (!nests.length) { stratMsg(actPrefix(f) + 'NO NESTS'); return; }
+    for (const t of nests) t.units.soldier += 2;
+    stratMsg(actPrefix(f) + 'MUSTER +2 x' + nests.length + ' NESTS');
+  }
+  function actTrade(f, ai) {
+    const r = STR.res[f];
+    if (r.bone >= 1) { r.bone--; r.seed = Math.min(99, r.seed + 4); stratMsg(actPrefix(f) + '1 BONE -> 4 SEED'); }
+    else if (r.seed >= 4) { r.seed -= 4; r.worker = Math.min(9, r.worker + 1); stratMsg(actPrefix(f) + '4 SEED -> 1 WORKER'); }
+    else stratMsg(actPrefix(f) + 'NOTHING TO TRADE');
+  }
+  function actRecruit(f, ai, tileIdx, unit) {
+    const t = STR.tiles[tileIdx]; if (!t || t.owner !== f || t.blds.nest <= 0) return false;
+    const cost = UCOST[unit]; if (!pay(f, { seed: cost })) { stratMsg(actPrefix(f) + 'NEED ' + cost + ' SEED'); return false; }
+    t.units[unit]++; stratMsg(actPrefix(f) + UNAME[unit] + ' AT ' + tName(tileIdx));
+    return true;
+  }
+  function actBuild(f, ai, tileIdx, kind) {
+    const t = STR.tiles[tileIdx]; if (!t || t.owner !== f) return false;
+    const b = BLD[kind];
+    if (!pay(f, { worker: b.cost })) { stratMsg(actPrefix(f) + 'NEED ' + b.cost + ' WORKER'); return false; }
+    t.blds[kind]++; stratMsg(actPrefix(f) + b.name + ' AT ' + tName(tileIdx));
+    return true;
+  }
+  function actMiracle(f, ai, tileIdx, kind) {
+    const r = STR.res[f];
+    if (kind === 'lightning') {
+      if (r.bone < 6) { stratMsg(actPrefix(f) + 'NEED 6 BONE'); return false; }
+      if (tileIdx < 0) return false;
+      const t = STR.tiles[tileIdx]; if (!t || t.owner === f) return false;
+      const n = armyCount(t); r.bone -= 6;
+      for (const k of UNIT_K) t.units[k] = 0;
+      stratMsg(actPrefix(f) + 'LIGHTNING ON ' + tName(tileIdx) + ' (-' + n + ')');
+      return true;
+    }
+    if (kind === 'freeze') {
+      if (r.bone < 4) { stratMsg(actPrefix(f) + 'NEED 4 BONE'); return false; }
+      if (tileIdx < 0) return false;
+      const t = STR.tiles[tileIdx]; if (!t || t.owner === f) return false;
+      t.frozen = 2; r.bone -= 4; stratMsg(actPrefix(f) + 'FROZE ' + tName(tileIdx));
+      return true;
+    }
+    // sacred offering
+    if (r.bone < 3) { stratMsg(actPrefix(f) + 'NEED 3 BONE'); return false; }
+    r.bone -= 3; gain(f, { seed: 8, worker: 3, bone: 0 });
+    stratMsg(actPrefix(f) + 'SACRED OFFERING +8 SEED +3 WRK');
+    return true;
+  }
+  function actMove(f, ai, fromIdx, toIdx) {
+    const a = STR.tiles[fromIdx], b = STR.tiles[toIdx];
+    if (!a || !b || a.owner !== f || !tAdj(fromIdx, toIdx)) return false;
+    if (a.frozen > 0) { stratMsg(actPrefix(f) + 'ARMY FROZEN'); return false; }
+    if (armyCount(a) <= 0) { stratMsg(actPrefix(f) + 'NO ARMY THERE'); return false; }
+    if (b.owner === f) {
+      for (const k of UNIT_K) { b.units[k] += a.units[k]; a.units[k] = 0; }
+      stratMsg(actPrefix(f) + 'REINFORCED ' + tName(toIdx));
+      return true;
+    }
+    if (b.owner < 0 || armyCount(b) <= 0) {
+      // claim the tile
+      b.owner = f;
+      if (b.res && f === FW) { gain(f, b.res.kind === 'worker' ? { worker: b.res.n } : b.res.kind === 'seed' ? { seed: b.res.n } : { bone: Math.min(9, b.res.n) }); }
+      else if (b.res) gain(f, b.res.kind === 'worker' ? { worker: b.res.n } : b.res.kind === 'seed' ? { seed: b.res.n } : { bone: Math.min(9, b.res.n) });
+      b.res = null;
+      for (const k of UNIT_K) { b.units[k] += a.units[k]; a.units[k] = 0; }
+      stratMsg(actPrefix(f) + 'CLAIMED ' + tName(toIdx));
+      return true;
+    }
+    // enemy tile with an army: battle
+    launchBattle(f, fromIdx, toIdx);
+    return true;
+  }
+  function actPrefix(f) { return f === FW ? '' : 'CRIMSON: '; }
+  function tName(i) { const t = STR.tiles[i]; return t ? TNAME[t.terr].slice(0, 4) + ' ' + (i + 1) : '?'; }
+
+  // ---- battle ----
+  function launchBattle(attacker, fromIdx, toIdx) {
+    const a = STR.tiles[fromIdx], b = STR.tiles[toIdx];
+    STR.battle = { attacker, from: fromIdx, to: toIdx, atkStr: armyStr(a), defStr: armyStr(b), watch: attacker !== FW };
+    if (attacker === FW) {
+      // player attacks: fly the gunship
+      state.phase = 'fly'; state.mode = 'battle'; state.waveTimer = 0;
+      P.hp = 100; P.bombs = Math.min(6, 3 + countBase('depot'));
+      enemies.length = 0; ebullets.length = 0; bullets.length = 0;
+      STR.spawned = 0; STR.clearT = 0;
+      spawnBattleEnemies(b, 1);
+      state.banner = 'BATTLE // ' + tName(toIdx); state.bannerCol = '#ff8a6a'; state.bannerT = 3;
+    } else {
+      // AI attacks the player: auto-resolve with a roll
+      stratMsg('CRIMSON ATTACKS ' + tName(toIdx));
+      const atk = armyStr(a) * (0.85 + crand() * 0.4);
+      const def = armyStr(b) * (1.15 + crand() * 0.4);
+      if (atk > def) {
+        b.owner = FR; b.units = { soldier: Math.max(1, Math.round(a.units.soldier * 0.6)), archer: 0, knight: 0, priest: 0, bomber: 0 };
+        for (const k of UNIT_K) a.units[k] = 0;
+        b.res = null;
+        stratMsg('CRIMSON TOOK ' + tName(toIdx));
+      } else {
+        for (const k of UNIT_K) a.units[k] = 0;
+        stratMsg(tName(toIdx) + ' HELD');
+      }
+      STR.battle = null;
+    }
+  }
+  function spawnBattleEnemies(t, mult) {
+    const order = ['soldier', 'archer', 'knight', 'priest', 'bomber'];
+    for (const k of order) {
+      const n = t.units[k] || 0;
+      for (let i = 0; i < n * mult; i++) {
+        const spec = ENEMY_SPEC[k];
+        enemies.push({ x: P.x + 640 + Math.random() * 260, y: groundY(P.x + 640), kind: spec.kind, hp: spec.hp,
+                       cool: 0, walk: -1, phase: Math.random() * 6.28, alive: true, fireCd: 1 + Math.random() * 2, utype: k });
+        STR.spawned++;
+      }
+    }
+    if (STR.spawned === 0) {  // empty enemy tile shouldn't happen, but guard
+      spawnEnemy(P.x + 700); STR.spawned = 1;
+    }
+  }
+  function resolvePlayerBattle(won) {
+    const bt = STR.battle; if (!bt) return;
+    const a = STR.tiles[bt.from], b = STR.tiles[bt.to];
+    if (won) {
+      b.owner = FW; b.res = null;
+      b.units = { soldier: Math.max(1, Math.round(a.units.soldier * 0.5)), archer: 0, knight: 0, priest: 0, bomber: 0 };
+      for (const k of UNIT_K) a.units[k] = 0;
+      stratMsg('WON BATTLE // TOOK ' + tName(bt.to));
+    } else {
+      for (const k of UNIT_K) a.units[k] = 0;
+      stratMsg('LOST BATTLE // ' + tName(bt.to) + ' HELD');
+    }
+    STR.battle = null;
+    state.phase = 'build'; state.mode = 'fly';
+    gatherEnemiesClear();
+  }
+  function gatherEnemiesClear() { enemies.length = 0; ebullets.length = 0; bullets.length = 0; missiles.length = 0; bombs.length = 0; }
+
+  // ---- player input ----
+  function stratClick(x, y) {
+    if (STR.over || !STR.ready) return;
+    if (STR.battle) return;
+    // bottom UI hit-testing
+    if (stratUI(x, y)) return;
+    if (STR.stage !== 'act' || STR.turn !== FW) return;
+    const ti = tileAtScreen(x, y);
+    if (ti < 0) return;
+    const act = curAct();
+    if (!STR.armed) { STR.sel = ti; return; }
+    if (STR.armed === 'move') {
+      if (STR.sel < 0) { if (STR.tiles[ti].owner === FW) STR.sel = ti; return; }
+      if (ti === STR.sel) { STR.sel = -1; return; }
+      if (actMove(FW, false, STR.sel, ti)) { STR.armed = null; STR.sel = -1; STR.actIdx++; endTurnIfDone(); }
+      else STR.sel = ti;
+      return;
+    }
+    if (STR.armed === 'build') {
+      if (actBuild(FW, false, ti, STR.kind)) { STR.armed = null; STR.actIdx++; endTurnIfDone(); }
+      return;
+    }
+    if (STR.armed === 'recruit') {
+      if (actRecruit(FW, false, ti, STR.ukind)) { STR.armed = null; STR.actIdx++; endTurnIfDone(); }
+      return;
+    }
+    if (STR.armed === 'miracle') {
+      if (STR.mirakind === 'offering') { if (actMiracle(FW, false, ti, 'offering')) { STR.armed = null; STR.actIdx++; endTurnIfDone(); } return; }
+      if (actMiracle(FW, false, ti, STR.mirakind)) { STR.armed = null; STR.actIdx++; endTurnIfDone(); }
+      return;
+    }
+  }
+  // returns true if the click was consumed by the bottom UI
+  function stratUI(x, y) {
+    const N = STR.N;
+    // ancestor pick stage: three big cards
+    if (STR.stage === 'pick' && STR.turn === FW) {
+      for (let i = 0; i < 3; i++) {
+        const bw = 200, bh = 74, bx = 60 + i * (bw + 14), by = VH - 96;
+        if (x >= bx && x < bx + bw && y >= by && y < by + bh) { if (STR.avail[i] !== undefined) pray(FW, STR.avail[i]); return true; }
+      }
+      return false;
+    }
+    if (STR.stage !== 'act' || STR.turn !== FW) return false;
+    // action bar: three actions at the bottom-left
+    for (let i = 0; i < 3; i++) {
+      const bw = 168, bh = 40, bx = 22 + i * (bw + 8), by = VH - 52;
+      if (x >= bx && x < bx + bw && y >= by && y < by + bh) {
+        if (i < STR.actIdx) return true;                  // already used
+        const a = ANC[STR.anc].acts[i];
+        if (i > STR.actIdx) return true;                  // must go in order
+        if (a === 'produce') { actProduce(FW, false); STR.actIdx++; endTurnIfDone(); }
+        else if (a === 'muster') { actMuster(FW, false); STR.actIdx++; endTurnIfDone(); }
+        else if (a === 'trade') { actTrade(FW, false); STR.actIdx++; endTurnIfDone(); }
+        else if (a === 'miracle') { if (STR.mirakind === 'offering') { actMiracle(FW, false, -1, 'offering'); STR.actIdx++; endTurnIfDone(); } else STR.armed = 'miracle'; }
+        else STR.armed = (STR.armed === a) ? null : a;
+        return true;
+      }
+    }
+    // subtype selectors for build / recruit / miracle
+    const a = curAct();
+    if (a === 'build') {
+      for (let i = 0; i < BLD_K.length; i++) {
+        const bw = 108, bx = 22 + i * (bw + 6), by = VH - 96;
+        if (x >= bx && x < bx + bw && y >= by && y < by + 28) { STR.kind = BLD_K[i]; return true; }
+      }
+    }
+    if (a === 'recruit') {
+      for (let i = 0; i < UNIT_K.length; i++) {
+        const bw = 96, bx = 22 + i * (bw + 6), by = VH - 96;
+        if (x >= bx && x < bx + bw && y >= by && y < by + 28) { STR.ukind = UNIT_K[i]; return true; }
+      }
+    }
+    if (a === 'miracle') {
+      const opts = ['offering', 'lightning', 'freeze'], lbl = ['OFFERING 3B', 'LIGHTNING 6B', 'FREEZE 4B'];
+      for (let i = 0; i < opts.length; i++) {
+        const bw = 132, bx = 22 + i * (bw + 6), by = VH - 96;
+        if (x >= bx && x < bx + bw && y >= by && y < by + 28) { STR.mirakind = opts[i]; return true; }
+      }
+    }
+    // end-turn button
+    const eb = { x: VW - 150, y: VH - 52, w: 128, h: 40 };
+    if (x >= eb.x && x < eb.x + eb.w && y >= eb.y && y < eb.y + eb.h) {
+      // skip the rest of this turn
+      STR.actIdx = 3; endTurnIfDone(); return true;
+    }
+    return false;
+  }
+  function stratKey(code) {
+    if (STR.over) return;
+    if (STR.stage === 'pick' && STR.turn === FW) {
+      if (code === 'Digit1' && STR.avail[0] !== undefined) pray(FW, STR.avail[0]);
+      if (code === 'Digit2' && STR.avail[1] !== undefined) pray(FW, STR.avail[1]);
+      if (code === 'Digit3' && STR.avail[2] !== undefined) pray(FW, STR.avail[2]);
+      return;
+    }
+    if (STR.stage !== 'act' || STR.turn !== FW) return;
+    if (code === 'Space' || code === 'Enter' || code === 'NumpadEnter') { skipAct(); return; }
+    if (code === 'Digit1') { const a = curAct(); if (a === 'produce' || a === 'muster' || a === 'trade') { stratUIAct(0); } }
+  }
+  function stratUIAct(i) {
+    const a = ANC[STR.anc].acts[i]; if (i !== STR.actIdx) return;
+    if (a === 'produce') { actProduce(FW, false); STR.actIdx++; endTurnIfDone(); }
+    else if (a === 'muster') { actMuster(FW, false); STR.actIdx++; endTurnIfDone(); }
+    else if (a === 'trade') { actTrade(FW, false); STR.actIdx++; endTurnIfDone(); }
+    else if (a === 'miracle') { if (STR.mirakind === 'offering') { actMiracle(FW, false, -1, 'offering'); STR.actIdx++; endTurnIfDone(); } else STR.armed = 'miracle'; }
+    else STR.armed = a;
+  }
+
+  // ---- AI turn ----
+  function aiStep(dt) {
+    if (STR.over || STR.turn !== FR || STR.stage !== 'act') return;
+    STR.aiT -= dt;
+    if (STR.aiT > 0) return;
+    STR.aiT = 0.7;
+    if (STR.actIdx >= 3) return;
+    const a = ANC[STR.anc].acts[STR.actIdx];
+    const mine = tilesOf(FR);
+    if (a === 'produce') { actProduce(FR, true); STR.actIdx++; endTurnIfDone(); return; }
+    if (a === 'muster') { actMuster(FR, true); STR.actIdx++; endTurnIfDone(); return; }
+    if (a === 'trade') { actTrade(FR, true); STR.actIdx++; endTurnIfDone(); return; }
+    if (a === 'build') {
+      const t = mine.find(t => t.blds.seed + t.blds.nest + t.blds.worship + t.blds.bath < 3);
+      const kinds = ['nest', 'seed', 'worship', 'bath'];
+      let done = false;
+      for (const k of kinds) if (STR.res[FR].worker >= BLD[k].cost) { done = actBuild(FR, true, t ? STR.tiles.indexOf(t) : STR.tiles.indexOf(mine[0]), k); break; }
+      STR.actIdx++; endTurnIfDone(); return;
+    }
+    if (a === 'recruit') {
+      const t = mine.find(t => t.blds.nest > 0);
+      const pref = ['soldier', 'archer', 'knight'];
+      let done = false;
+      for (const u of pref) if (STR.res[FR].seed >= UCOST[u] && t) { done = actRecruit(FR, true, STR.tiles.indexOf(t), u); break; }
+      STR.actIdx++; endTurnIfDone(); return;
+    }
+    if (a === 'miracle') {
+      let done = false;
+      if (STR.res[FR].bone >= 3) { actMiracle(FR, true, -1, 'offering'); done = true; }
+      else if (STR.res[FR].bone >= 6) { const tg = tilesOf(FW).filter(t => armyCount(t) >= 2); if (tg.length) { actMiracle(FR, true, STR.tiles.indexOf(tg[0]), 'lightning'); done = true; } }
+      STR.actIdx++; endTurnIfDone(); return;
+    }
+    if (a === 'move') {
+      // simple: move the strongest army toward the nearest flag / your land
+      const withArmy = mine.filter(t => armyCount(t) > 0 && t.frozen <= 0);
+      withArmy.sort((x, y) => armyStr(y) - armyStr(x));
+      const src = withArmy[0];
+      if (src) {
+        const si = STR.tiles.indexOf(src);
+        // prefer a neutral flag, then the player's tile, then any neutral
+        let targets = [];
+        for (let i = 0; i < STR.N; i++) if (tAdj(si, i)) {
+          const t = STR.tiles[i];
+          if (t.owner !== FR) targets.push({ i, score: (t.flag ? 2 : 0) + (t.owner === FW ? 3 : 0) + (armyCount(t) === 0 ? 1 : 0) });
+        }
+        targets.sort((x, y) => x.score - y.score);
+        const dst = targets[targets.length - 1];
+        if (dst) actMove(FR, true, si, dst.i);
+      }
+      STR.actIdx++; endTurnIfDone(); return;
+    }
+    STR.actIdx++; endTurnIfDone();
+  }
+
+  // ---- update ----
+  function stratUpdate(dt) {
+    if (!STR.ready) return;
+    if (STR.msgT > 0) STR.msgT -= dt;
+    if (STR.over) return;
+    if (STR.turn === FR && STR.stage === 'pick') {
+      STR.aiT -= dt;
+      if (STR.aiT <= 0) {
+        const ai = STR.avail[(crand() * STR.avail.length) | 0];
+        pray(FR, ai === undefined ? 0 : ai);
+      }
+      return;
+    }
+    if (STR.turn === FR && STR.stage === 'act') aiStep(dt);
+  }
+
+  // ---- draw ----
+  function drawStrategy() {
+    if (!islCanvas) buildIsland();
+    if (!STR.ready) buildBoard();
+    ctx.fillStyle = '#05080f'; ctx.fillRect(0, 0, VW, VH);
+    ctx.fillStyle = '#0a1220'; ctx.fillRect(0, 64, VW, VH - 64 - 60);
+    const M = mapRect();
+    ctx.imageSmoothingEnabled = false;
+    if ((!mapCanvas && islCanvas) || cityDirty) renderCity();
+    if (mapCanvas) ctx.drawImage(mapCanvas, M.ox, M.oy, M.iw, M.ih);
+    // adjacency links between neighbouring tiles
+    ctx.lineWidth = 1;
+    for (let i = 0; i < STR.N; i++) for (let j = i + 1; j < STR.N; j++) if (tAdj(i, j)) {
+      const a = STR.tiles[i], b = STR.tiles[j];
+      const ax = M.ox + a.px * M.s, ay = M.oy + a.py * M.s, bx = M.ox + b.px * M.s, by = M.oy + b.py * M.s;
+      ctx.strokeStyle = (a.owner >= 0 && a.owner === b.owner) ? FCOL[a.owner] + '66' : 'rgba(150,170,200,0.18)';
+      ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+    }
+    // tiles
+    for (let i = 0; i < STR.N; i++) {
+      const t = STR.tiles[i], sx = M.ox + t.px * M.s, sy = M.oy + t.py * M.s;
+      const R = 17;
+      ctx.beginPath(); ctx.arc(sx, sy, R, 0, 6.283);
+      ctx.fillStyle = TCOL[t.terr]; ctx.fill();
+      if (t.owner >= 0) { ctx.globalAlpha = 0.42; ctx.fillStyle = FCOL[t.owner]; ctx.fill(); ctx.globalAlpha = 1; }
+      ctx.lineWidth = t.owner >= 0 ? 2.5 : 1.2;
+      ctx.strokeStyle = t.owner >= 0 ? FCOL[t.owner] : 'rgba(20,28,40,0.8)';
+      ctx.stroke();
+      // castle
+      if (t.castle >= 0) {
+        ctx.fillStyle = FCOL[t.castle]; ctx.font = '700 15px ui-monospace,Menlo,monospace';
+        ctx.textAlign = 'center'; ctx.fillText('\\u265c', sx, sy + 5); ctx.textAlign = 'left';
+      } else if (armyCount(t) > 0) {
+        ctx.fillStyle = '#fff2d0'; ctx.font = '700 16px ui-monospace,Menlo,monospace';
+        ctx.textAlign = 'center'; ctx.fillText(String(armyCount(t)), sx, sy + 5); ctx.textAlign = 'left';
+      }
+      // flag marker
+      if (t.flag) {
+        ctx.strokeStyle = '#ffe6bf'; ctx.lineWidth = 1.6;
+        ctx.beginPath(); ctx.moveTo(sx + 11, sy - 17); ctx.lineTo(sx + 11, sy - 5); ctx.stroke();
+        ctx.fillStyle = t.owner === FW ? '#8fffa8' : t.owner === FR ? '#ff6b5a' : '#e8eef6';
+        ctx.beginPath(); ctx.moveTo(sx + 11, sy - 17); ctx.lineTo(sx + 21, sy - 14); ctx.lineTo(sx + 11, sy - 11); ctx.closePath(); ctx.fill();
+      }
+      // buildings pips
+      let bp = 0;
+      for (const k of BLD_K) for (let n = 0; n < t.blds[k]; n++) {
+        ctx.fillStyle = k === 'seed' ? '#ffd27a' : k === 'nest' ? '#ff8a6a' : k === 'worship' ? '#c9a6ff' : '#7fd0ff';
+        ctx.fillRect(sx - 14 + bp * 6, sy + 20, 4, 4); bp++;
+      }
+      if (t.frozen > 0) { ctx.strokeStyle = '#8fd8ff'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(sx, sy, R + 2, 0, 6.283); ctx.stroke(); }
+      if (STR.sel === i) { ctx.strokeStyle = '#ffe6bf'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(sx, sy, R + 5, 0, 6.283); ctx.stroke(); }
+    }
+    // header
+    ctx.textAlign = 'left'; ctx.fillStyle = '#f0b46b'; ctx.font = '700 20px ui-monospace,Menlo,monospace';
+    ctx.fillText('AVIANOS // ISLAND', 22, 34);
+    ctx.fillStyle = '#8b97a8'; ctx.font = '600 12px ui-monospace,Menlo,monospace';
+    ctx.fillText('pray to an ancestor \\u00b7 it grants 3 actions \\u00b7 hold 4 flags 2 rounds to win', 22, 54);
+    ctx.textAlign = 'right'; ctx.font = '700 15px ui-monospace,Menlo,monospace';
+    ctx.fillStyle = '#ffe6bf'; ctx.fillText('ROUND ' + STR.round, VW - 22, 30);
+    ctx.fillStyle = FCOL[FW]; ctx.fillText('YOU ' + flagCount(FW) + ' FLAG' + (flagCount(FW) === 1 ? '' : 'S'), VW - 22, 50);
+    ctx.fillStyle = FCOL[FR]; ctx.fillText('CRIMSON ' + flagCount(FR) + ' FLAGS', VW - 22, 68);
+    ctx.textAlign = 'left';
+    // resource readout
+    if (STR.turn === FW || STR.stage === 'pick') {
+      const r = STR.res[FW];
+      ctx.fillStyle = '#ffd27a'; ctx.font = '700 14px ui-monospace,Menlo,monospace';
+      ctx.fillText('SEED ' + r.seed + '   WORK ' + r.worker + '   BONE ' + r.bone, 22, 78);
+    }
+    // ---- bottom UI ----
+    if (STR.stage === 'pick' && STR.turn === FW && !STR.over) {
+      ctx.textAlign = 'center'; ctx.font = '700 14px ui-monospace,Menlo,monospace'; ctx.fillStyle = '#ffe6bf';
+      ctx.fillText('PRAY \\u2014 CHOOSE AN ANCESTOR', VW / 2, VH - 106);
+      for (let i = 0; i < 3; i++) {
+        const bw = 200, bh = 74, bx = 60 + i * (bw + 14), by = VH - 96, ai = STR.avail[i];
+        if (ai === undefined) continue;
+        ctx.fillStyle = 'rgba(16,22,36,0.95)'; ctx.fillRect(bx, by, bw, bh);
+        ctx.strokeStyle = ANC[ai].col; ctx.lineWidth = 2; ctx.strokeRect(bx + 0.5, by + 0.5, bw - 1, bh - 1);
+        ctx.fillStyle = ANC[ai].col; ctx.font = '700 16px ui-monospace,Menlo,monospace';
+        ctx.fillText(ANC[ai].name, bx + bw / 2, by + 24);
+        ctx.fillStyle = '#9fb4d0'; ctx.font = '600 11px ui-monospace,Menlo,monospace';
+        ctx.fillText(ANC[ai].acts.map(actName).join(' \\u2192 '), bx + bw / 2, by + 46);
+        ctx.fillStyle = '#5d6b80'; ctx.font = '600 10px ui-monospace,Menlo,monospace';
+        ctx.fillText('[' + (i + 1) + ']', bx + bw / 2, by + 64);
+      }
+    } else if (STR.turn === FW && !STR.over) {
+      const a = curAct();
+      ctx.fillStyle = ANC[STR.anc].col; ctx.font = '700 15px ui-monospace,Menlo,monospace';
+      ctx.fillText(ANC[STR.anc].name + ' \\u2192 ', 22, VH - 66);
+      for (let i = 0; i < 3; i++) {
+        const bw = 168, bh = 40, bx = 22 + i * (bw + 8), by = VH - 52;
+        const done = i < STR.actIdx, cur = i === STR.actIdx;
+        ctx.fillStyle = done ? 'rgba(40,50,66,0.55)' : cur ? 'rgba(120,220,140,0.16)' : 'rgba(20,28,44,0.7)';
+        ctx.fillRect(bx, by, bw, bh);
+        ctx.strokeStyle = done ? 'rgba(90,110,140,0.4)' : cur ? '#7fdc8c' : 'rgba(90,120,170,0.4)';
+        ctx.lineWidth = cur ? 2 : 1; ctx.strokeRect(bx + 0.5, by + 0.5, bw - 1, bh - 1);
+        ctx.fillStyle = done ? '#5d6b80' : cur ? '#dff7e6' : '#9fb4d0';
+        ctx.font = '700 13px ui-monospace,Menlo,monospace'; ctx.textAlign = 'center';
+        let extra = '';
+        if (cur) {
+          if (a === 'build') extra = ' \\u00b7 ' + BLD[STR.kind].name.split(' ')[0];
+          if (a === 'recruit') extra = ' \\u00b7 ' + UNAME[STR.ukind];
+          if (a === 'miracle') extra = ' \\u00b7 ' + STR.mirakind.toUpperCase();
+        }
+        ctx.fillText(actName(ANC[STR.anc].acts[i]) + (done ? ' \\u2713' : '') + extra, bx + bw / 2, by + 25);
+        ctx.textAlign = 'left';
+      }
+      // subtype selectors
+      if (a === 'build') for (let i = 0; i < BLD_K.length; i++) {
+        const bw = 108, bx = 22 + i * (bw + 6), by = VH - 96, on = STR.kind === BLD_K[i];
+        ctx.fillStyle = on ? 'rgba(120,220,140,0.2)' : 'rgba(20,28,44,0.8)'; ctx.fillRect(bx, by, bw, 28);
+        ctx.strokeStyle = on ? '#7fdc8c' : 'rgba(90,120,170,0.45)'; ctx.lineWidth = 1; ctx.strokeRect(bx + 0.5, by + 0.5, bw - 1, 27);
+        ctx.fillStyle = on ? '#dff7e6' : '#9fb4d0'; ctx.font = '700 10px ui-monospace,Menlo,monospace'; ctx.textAlign = 'center';
+        ctx.fillText(BLD[BLD_K[i]].name.split(' ')[0] + ' ' + BLD[BLD_K[i]].cost + 'W', bx + bw / 2, by + 18); ctx.textAlign = 'left';
+      }
+      if (a === 'recruit') for (let i = 0; i < UNIT_K.length; i++) {
+        const bw = 96, bx = 22 + i * (bw + 6), by = VH - 96, on = STR.ukind === UNIT_K[i];
+        ctx.fillStyle = on ? 'rgba(120,220,140,0.2)' : 'rgba(20,28,44,0.8)'; ctx.fillRect(bx, by, bw, 28);
+        ctx.strokeStyle = on ? '#7fdc8c' : 'rgba(90,120,170,0.45)'; ctx.lineWidth = 1; ctx.strokeRect(bx + 0.5, by + 0.5, bw - 1, 27);
+        ctx.fillStyle = on ? '#dff7e6' : '#9fb4d0'; ctx.font = '700 10px ui-monospace,Menlo,monospace'; ctx.textAlign = 'center';
+        ctx.fillText(UNAME[UNIT_K[i]].slice(0, 6) + ' ' + UCOST[UNIT_K[i]], bx + bw / 2, by + 18); ctx.textAlign = 'left';
+      }
+      if (a === 'miracle') {
+        const opts = ['offering', 'lightning', 'freeze'], lbl = ['OFFERING 3', 'LIGHTNING 6', 'FREEZE 4'];
+        for (let i = 0; i < 3; i++) {
+          const bw = 132, bx = 22 + i * (bw + 6), by = VH - 96, on = STR.mirakind === opts[i];
+          ctx.fillStyle = on ? 'rgba(200,150,255,0.2)' : 'rgba(20,28,44,0.8)'; ctx.fillRect(bx, by, bw, 28);
+          ctx.strokeStyle = on ? '#c9a6ff' : 'rgba(90,120,170,0.45)'; ctx.lineWidth = 1; ctx.strokeRect(bx + 0.5, by + 0.5, bw - 1, 27);
+          ctx.fillStyle = on ? '#efe6ff' : '#9fb4d0'; ctx.font = '700 10px ui-monospace,Menlo,monospace'; ctx.textAlign = 'center';
+          ctx.fillText(lbl[i], bx + bw / 2, by + 18); ctx.textAlign = 'left';
+        }
+      }
+      // end turn
+      const eb = { x: VW - 150, y: VH - 52, w: 128, h: 40 };
+      ctx.fillStyle = 'rgba(255,140,90,0.14)'; ctx.fillRect(eb.x, eb.y, eb.w, eb.h);
+      ctx.strokeStyle = '#ff9a6a'; ctx.lineWidth = 1.5; ctx.strokeRect(eb.x + 0.5, eb.y + 0.5, eb.w - 1, eb.h - 1);
+      ctx.fillStyle = '#ffd7c0'; ctx.font = '700 13px ui-monospace,Menlo,monospace'; ctx.textAlign = 'center';
+      ctx.fillText('END TURN [SPC]', eb.x + eb.w / 2, eb.y + 25); ctx.textAlign = 'left';
+    } else if (STR.turn === FR && !STR.over) {
+      ctx.fillStyle = '#ff8a72'; ctx.font = '700 16px ui-monospace,Menlo,monospace'; ctx.textAlign = 'center';
+      ctx.fillText('CRIMSON MOVES \\u2026', VW / 2, VH - 30); ctx.textAlign = 'left';
+    }
+    // status line
+    if (STR.msgT > 0) {
+      ctx.globalAlpha = Math.min(1, STR.msgT * 1.6);
+      ctx.fillStyle = '#ffe6bf'; ctx.font = '700 14px ui-monospace,Menlo,monospace'; ctx.textAlign = 'center';
+      ctx.fillText(STR.msg, VW / 2, 84); ctx.textAlign = 'left'; ctx.globalAlpha = 1;
+    }
+    ctx.fillStyle = '#4d5a6e'; ctx.font = '600 11px ui-monospace,Menlo,monospace';
+    for (let i = 0; i < STR.log.length; i++) ctx.fillText(STR.log[i], 22, 232 + i * 15);
+    if (STR.over) {
+      ctx.fillStyle = 'rgba(5,7,15,0.78)'; ctx.fillRect(0, 0, VW, VH);
+      ctx.textAlign = 'center';
+      ctx.fillStyle = STR.win ? '#8fffa8' : '#ff6b5a'; ctx.font = '700 44px ui-monospace,Menlo,monospace';
+      ctx.fillText(STR.win ? 'ISLAND CONQUERED' : 'YOUR LINE FALLS', VW / 2, VH / 2 - 30);
+      ctx.fillStyle = '#ffe6bf'; ctx.font = '600 18px ui-monospace,Menlo,monospace';
+      ctx.fillText('round ' + STR.round + '  \\u00b7  flags held ' + flagCount(FW) + '/6', VW / 2, VH / 2 + 10);
+      const blink = 0.55 + 0.45 * Math.sin(state.t * 6);
+      ctx.globalAlpha = blink; ctx.fillStyle = '#ffd27a'; ctx.font = '600 15px ui-monospace,Menlo,monospace';
+      ctx.fillText('press R to play again', VW / 2, VH / 2 + 42); ctx.globalAlpha = 1;
+      ctx.textAlign = 'left';
+    }
+  }
+
   // ---- region economy ----
   // you win a region, invest scrap into it, and it pays that scrap back at the
   // end of every following round -- win or lose.
@@ -811,6 +1501,7 @@
     return total;
   }
   function shotDown() {
+    if (STR.battle) { burst(P.x, P.y, 40, '#ff5a3c', 320); state.shake = 1.4; resolvePlayerBattle(false); return; }
     state.airframes--;
     burst(P.x, P.y, 40, '#ff5a3c', 320); state.shake = 1.4;
     // clear the battlefield so the rest of this frame is harmless
@@ -937,13 +1628,8 @@
     if (state.shake > 0) state.shake = Math.max(0, state.shake - dt * 3);
 
     if (state.phase === 'build') {
-      for (const f of floaters) { f.life -= dt; f.y -= 22 * dt; }
-      for (let i = floaters.length - 1; i >= 0; i--) if (floaters[i].life <= 0) floaters.splice(i, 1);
-      if (state.buildMsgT > 0) state.buildMsgT -= dt;
       if (state.bannerT > 0) state.bannerT -= dt;
-      // let the cities keep filling in while we plan the next push
-      cityAcc += dt; let guard = 0;
-      while (cityAcc >= CITY_TICK && guard++ < 8) { cityAcc -= CITY_TICK; cityStep(); }
+      stratUpdate(dt);
       return;
     }
     // safety net: any lethal damage (crash, blast) takes the chopper down
@@ -1013,12 +1699,20 @@
 
       // waves
       state.waveTimer += dt;
-      if (state.waveTimer > 18) { state.waveTimer = 0; endWave(); }
-      state.spawnCd -= dt;
-      const maxAlive = 4 + state.wave;
-      if (state.spawnCd <= 0 && enemies.filter(e => e.alive).length < maxAlive) {
-        spawnEnemy(P.x + 700 + Math.random() * 400);
-        state.spawnCd = Math.max(0.5, 1.6 - state.wave * 0.12);
+      if (STR.battle) {
+        const alive = enemies.filter(e => e.alive).length;
+        if (STR.spawned > 0 && alive === 0) {
+          STR.clearT += dt;
+          if (STR.clearT > 1.2) { resolvePlayerBattle(true); return; }
+        } else STR.clearT = 0;
+      } else {
+        if (state.waveTimer > 18) { state.waveTimer = 0; endWave(); }
+        state.spawnCd -= dt;
+        const maxAlive = 4 + state.wave;
+        if (state.spawnCd <= 0 && enemies.filter(e => e.alive).length < maxAlive) {
+          spawnEnemy(P.x + 700 + Math.random() * 400);
+          state.spawnCd = Math.max(0.5, 1.6 - state.wave * 0.12);
+        }
       }
     } else {
       state.camX += 40 * dt;
@@ -1350,191 +2044,8 @@
     if (state.score > state.best) { state.best = state.score; try { localStorage.setItem('dc_best', String(state.best)); } catch (e) {} }
   }
 
-  function handleBuildClick(x, y) {
-    for (let i = 0; i < 4; i++) { const bw = 150, bx = 20 + i * (bw + 6), by = VH - 50; if (x >= bx && x < bx + bw && y >= by && y < by + 36) { buildAtRegion(DEF_ORDER[i]); return; } }
-    const lb = { x: VW - 236, y: VH - 50, w: 216, h: 36 };
-    if (x >= lb.x && x < lb.x + lb.w && y >= lb.y && y < lb.y + lb.h) { startWave(); return; }
-    const db = { x: VW - 244, y: 200, w: 212, h: 30 };
-    if (x >= db.x && x < db.x + db.w && y >= db.y && y < db.y + db.h) { developRegion(); return; }
-    const M = mapRect();
-    // battles sit between nodes; check them first so they win the overlap
-    for (let i = 0; i < BATTLES.length; i++) {
-      const b = BATTLES[i], p = { x: M.ox + b.x * M.s, y: M.oy + b.y * M.s };
-      if (x > p.x - 16 && x < p.x + 16 && y > p.y - 16 && y < p.y + 16) { selectBattle(i); return; }
-    }
-    for (let i = 0; i < REGIONS.length; i++) {
-      const p = regionScreen(REGIONS[i], M.ox, M.oy, M.s);
-      if (x > p.x - 22 && x < p.x + 22 && y > p.y - 22 && y < p.y + 22) { state.region = i; state.battle = -1; return; }
-    }
-  }
-  function drawBuild() {
-    if (!islCanvas) buildIsland();
-    ctx.fillStyle = '#05080f'; ctx.fillRect(0, 0, VW, VH);
-    ctx.fillStyle = '#0a1220'; ctx.fillRect(0, 64, VW, VH - 64 - 62);
-    const M = mapRect();
-    ctx.imageSmoothingEnabled = false;
-    if ((!mapCanvas && islCanvas) || cityDirty) renderCity();
-    if (mapCanvas) ctx.drawImage(mapCanvas, M.ox, M.oy, M.iw, M.ih);
-    // header
-    ctx.textAlign = 'left'; ctx.fillStyle = '#f0b46b'; ctx.font = '700 20px ui-monospace,Menlo,monospace';
-    ctx.fillText('CAMPAIGN // ISLAND', 24, 38);
-    ctx.fillStyle = '#8b97a8'; ctx.font = '600 12px ui-monospace,Menlo,monospace';
-    ctx.fillText('click a region \u00b7 fortify it \u00b7 DEVELOP it once you own it \u00b7 then LAUNCH', 24, 58);
-    ctx.textAlign = 'right'; ctx.font = '700 16px ui-monospace,Menlo,monospace';
-    ctx.fillStyle = '#ffd27a'; ctx.fillText('SCRAP ' + Math.floor(state.scrap), VW - 24, 28);
-    ctx.fillStyle = '#8b97a8'; ctx.font = '600 12px ui-monospace,Menlo,monospace';
-    ctx.fillText('WAVE ' + state.wave, VW - 24, 48);
-    ctx.fillStyle = totalIncome() > 0 ? '#8fffa8' : '#4d5a6e';
-    ctx.fillText('INCOME +' + totalIncome() + '/round', VW - 24, 68);
-    const hAlive = HOSTILES.filter(h => h.alive).length;
-    ctx.fillStyle = hAlive ? '#ff8a72' : '#4d5a6e';
-    ctx.fillText('HOSTILES ' + hAlive + '  \u00b7  FRONTS ' + BATTLES.length, VW - 24, 88);
-    ctx.textAlign = 'left';
-    // region nodes
-    for (let i = 0; i < REGIONS.length; i++) {
-      const r = REGIONS[i], p = regionScreen(r, M.ox, M.oy, M.s), sel = i === state.region;
-      ctx.fillStyle = 'rgba(5,8,15,0.72)'; ctx.fillRect(p.x - 13, p.y - 13, 26, 26);
-      ctx.strokeStyle = r.owned ? '#8fffa8' : sel ? '#ffd27a' : '#9fb4d0';
-      ctx.lineWidth = sel ? 3 : 2; ctx.strokeRect(p.x - 12.5, p.y - 12.5, 25, 25);
-      ctx.fillStyle = r.owned ? '#8fffa8' : sel ? '#ffd27a' : '#dbe6f2';
-      ctx.font = '700 14px ui-monospace,Menlo,monospace'; ctx.textAlign = 'center';
-      ctx.fillText(String(i + 1), p.x, p.y + 5);
-      r.structs.forEach((st, k) => { ctx.fillStyle = BUILD[st.kind].col; ctx.fillRect(p.x - 10 + k * 7, p.y + 15, 5, 5); });
-      if (r.owned) {
-        // development pips
-        for (let k = 0; k < DEV_TIERS.length; k++) {
-          ctx.fillStyle = k < r.dev ? '#8fffa8' : 'rgba(143,255,168,0.22)';
-          ctx.fillRect(p.x - 9 + k * 7, p.y - 20, 5, 5);
-        }
-        if (devYield(r.dev) > 0) {
-          ctx.fillStyle = '#b8f0c4'; ctx.font = '700 10px ui-monospace,Menlo,monospace';
-          ctx.fillText('+' + devYield(r.dev), p.x, p.y - 25);
-        }
-      }
-      if (sel || r.owned) { ctx.fillStyle = sel ? '#ffe6bf' : '#9fe6b4'; ctx.font = '600 11px ui-monospace,Menlo,monospace'; ctx.fillText(r.name, p.x, p.y + 36); }
-      ctx.textAlign = 'left';
-    }
-    // hostile strongholds, and the fronts they push toward your cities
-    for (let i = 0; i < HOSTILES.length; i++) {
-      const h = HOSTILES[i]; if (!h.alive) continue;
-      const p = { x: M.ox + h.px * M.s, y: M.oy + h.py * M.s };
-      ctx.fillStyle = 'rgba(26,6,8,0.82)'; ctx.fillRect(p.x - 11, p.y - 11, 22, 22);
-      ctx.strokeStyle = '#ff6b5a'; ctx.lineWidth = 2; ctx.strokeRect(p.x - 10.5, p.y - 10.5, 21, 21);
-      ctx.textAlign = 'center'; ctx.font = '700 13px ui-monospace,Menlo,monospace'; ctx.fillStyle = '#ff8a72';
-      ctx.fillText('\u2620', p.x, p.y + 5);
-      for (let k = 0; k < 3; k++) {   // development pips
-        ctx.fillStyle = k < h.dev ? '#ff6b5a' : 'rgba(255,107,90,0.22)';
-        ctx.fillRect(p.x - 9 + k * 7, p.y - 19, 5, 5);
-      }
-      ctx.fillStyle = '#ff9a8a'; ctx.font = '600 10px ui-monospace,Menlo,monospace';
-      ctx.fillText(h.name, p.x, p.y + 26);
-      ctx.textAlign = 'left';
-    }
-    for (let i = 0; i < BATTLES.length; i++) {
-      const b = BATTLES[i];
-      const p = { x: M.ox + b.x * M.s, y: M.oy + b.y * M.s };
-      const h = HOSTILES[b.hi], r = REGIONS[b.region];
-      // draw the contested corridor: hostile -> front -> city
-      if (h && h.alive) {
-        const hp = { x: M.ox + h.px * M.s, y: M.oy + h.py * M.s };
-        ctx.strokeStyle = 'rgba(255,90,60,0.5)'; ctx.lineWidth = 2; ctx.setLineDash([4, 4]);
-        ctx.beginPath(); ctx.moveTo(hp.x, hp.y); ctx.lineTo(p.x, p.y); ctx.stroke();
-        ctx.setLineDash([]);
-      }
-      if (r) {
-        const rp = regionScreen(r, M.ox, M.oy, M.s);
-        ctx.strokeStyle = 'rgba(255,210,122,0.35)'; ctx.lineWidth = 2; ctx.setLineDash([4, 4]);
-        ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(rp.x, rp.y); ctx.stroke();
-        ctx.setLineDash([]);
-      }
-      const sel = state.battle === i, pulse = 0.5 + 0.5 * Math.sin(state.t * 6);
-      ctx.globalAlpha = 0.28 + 0.42 * pulse; ctx.fillStyle = '#ff3b2f';
-      ctx.beginPath(); ctx.arc(p.x, p.y, 12 + pulse * 6, 0, 6.283); ctx.fill(); ctx.globalAlpha = 1;
-      ctx.strokeStyle = sel ? '#ffe6bf' : '#ff7a5c'; ctx.lineWidth = sel ? 3 : 2;
-      ctx.beginPath(); ctx.arc(p.x, p.y, 11, 0, 6.283); ctx.stroke();
-      ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.beginPath();
-      ctx.moveTo(p.x - 5, p.y - 5); ctx.lineTo(p.x + 5, p.y + 5);
-      ctx.moveTo(p.x + 5, p.y - 5); ctx.lineTo(p.x - 5, p.y + 5); ctx.stroke();
-      for (let k = 0; k < b.ttlMax; k++) {   // turns left before the front falls
-        ctx.fillStyle = k < b.ttl ? '#ffd27a' : 'rgba(255,210,122,0.25)';
-        ctx.fillRect(p.x - 8 + k * 6, p.y + 15, 4, 5);
-      }
-    }
-    // intel panel
-    const r = REGIONS[state.region];
-    if (r) {
-      const PX = VW - 252, PY = 72, PW = 228, PH = 190;
-      ctx.fillStyle = 'rgba(6,10,18,0.88)'; ctx.fillRect(PX, PY, PW, PH);
-      ctx.strokeStyle = r.owned ? 'rgba(143,255,168,0.55)' : 'rgba(120,150,190,0.5)'; ctx.lineWidth = 1;
-      ctx.strokeRect(PX + 0.5, PY + 0.5, PW - 1, PH - 1);
-      ctx.textAlign = 'left';
-      ctx.fillStyle = '#ffd27a'; ctx.font = '700 14px ui-monospace,Menlo,monospace';
-      ctx.fillText(r.name, PX + 12, PY + 22);
-      ctx.fillStyle = '#9fb4d0'; ctx.font = '600 12px ui-monospace,Menlo,monospace';
-      ctx.fillText('terrain  ' + r.terrain, PX + 12, PY + 42);
-      ctx.fillText('threat   ' + '^'.repeat(Math.min(5, r.threat)), PX + 12, PY + 59);
-      ctx.fillStyle = r.owned ? '#8fffa8' : '#ff9a6a';
-      ctx.fillText('status   ' + (r.owned ? ('SECURED · city ' + cityBuildingCount(state.region)) : 'hostile'), PX + 12, PY + 76);
-      ctx.fillStyle = '#5d6b80'; ctx.fillRect(PX + 10, PY + 86, PW - 20, 1);
-      if (r.owned) {
-        const tier = DEV_TIERS[r.dev];
-        ctx.fillStyle = '#9fb4d0'; ctx.font = '600 12px ui-monospace,Menlo,monospace';
-        ctx.fillText('dev      ' + (r.dev ? DEV_TIERS[r.dev - 1].name : 'none') + '  (L' + r.dev + '/3)', PX + 12, PY + 104);
-        ctx.fillStyle = '#8fffa8';
-        ctx.fillText('yield    +' + devYield(r.dev) + ' scrap / round', PX + 12, PY + 121);
-        // develop button
-        const db = { x: PX + 12, y: PY + 128, w: PW - 24, h: 30 };
-        const afford = tier && state.scrap >= tier.cost;
-        ctx.fillStyle = !tier ? 'rgba(80,90,110,0.3)' : afford ? 'rgba(120,220,140,0.18)' : 'rgba(255,110,90,0.12)';
-        ctx.fillRect(db.x, db.y, db.w, db.h);
-        ctx.strokeStyle = !tier ? 'rgba(120,150,190,0.5)' : afford ? '#7fdc8c' : 'rgba(255,140,110,0.6)';
-        ctx.lineWidth = 1; ctx.strokeRect(db.x + 0.5, db.y + 0.5, db.w - 1, db.h - 1);
-        ctx.fillStyle = !tier ? '#7d8a9c' : afford ? '#b8f0c4' : '#c98a80';
-        ctx.font = '700 12px ui-monospace,Menlo,monospace'; ctx.textAlign = 'center';
-        ctx.fillText(!tier ? 'MAX DEVELOPMENT' : ('DEVELOP \u2192 ' + tier.name + '  ' + tier.cost + ' scrap'),
-                     db.x + db.w / 2, db.y + 20);
-        ctx.textAlign = 'left';
-      } else {
-        ctx.fillStyle = '#7d8a9c'; ctx.font = '600 12px ui-monospace,Menlo,monospace';
-        ctx.fillText('develop', PX + 12, PY + 112);
-        ctx.fillStyle = '#c98a80'; ctx.font = '700 12px ui-monospace,Menlo,monospace';
-        ctx.fillText('capture this region first', PX + 12, PY + 134);
-      }
-      ctx.fillStyle = '#5d6b80'; ctx.fillRect(PX + 10, PY + 166, PW - 20, 1);
-      ctx.fillStyle = '#8b97a8'; ctx.font = '600 12px ui-monospace,Menlo,monospace';
-      ctx.fillText('AIRFRAMES', PX + 12, PY + 184);
-      for (let i = 0; i < 3; i++) {
-        ctx.beginPath(); ctx.arc(PX + 96 + i * 15, PY + 180, 5, 0, 6.283);
-        ctx.fillStyle = i < state.airframes ? '#7fdc8c' : 'rgba(127,220,140,0.22)'; ctx.fill();
-      }
-    }
-    // build buttons
-    for (let i = 0; i < 4; i++) {
-      const def = BUILD[DEF_ORDER[i]], bw = 150, bh = 36, bx = 20 + i * (bw + 6), by = VH - 50;
-      const has = r && r.structs.some(s => s.kind === DEF_ORDER[i]);
-      ctx.fillStyle = has ? 'rgba(255,210,122,0.16)' : 'rgba(20,28,44,0.9)'; ctx.fillRect(bx, by, bw, bh);
-      ctx.strokeStyle = has ? '#ffd27a' : 'rgba(90,120,170,0.55)'; ctx.lineWidth = 1; ctx.strokeRect(bx + 0.5, by + 0.5, bw - 1, bh - 1);
-      ctx.fillStyle = def.col; ctx.font = '700 12px ui-monospace,Menlo,monospace'; ctx.fillText((i + 1) + ' ' + def.name, bx + 8, by + 15);
-      ctx.fillStyle = '#8b97a8'; ctx.font = '600 10px ui-monospace,Menlo,monospace'; ctx.fillText(def.cost + ' scrap \u00b7 ' + (has ? 'upgrade' : 'build here'), bx + 8, by + 29);
-    }
-    const lb = { x: VW - 236, y: VH - 50, w: 216, h: 36 };
-    ctx.fillStyle = 'rgba(120,220,140,0.18)'; ctx.fillRect(lb.x, lb.y, lb.w, lb.h);
-    ctx.strokeStyle = '#7fdc8c'; ctx.lineWidth = 2; ctx.strokeRect(lb.x + 0.5, lb.y + 0.5, lb.w - 1, lb.h - 1);
-    ctx.fillStyle = '#b8f0c4'; ctx.font = '700 13px ui-monospace,Menlo,monospace'; ctx.textAlign = 'center';
-    const bs = state.battle >= 0 ? BATTLES[state.battle] : null;
-    ctx.fillText((bs ? 'ASSAULT  \u25b6  ' : 'LAUNCH  \u25b6  ') + (bs ? bs.name : (r ? r.name : '')) + '  [space]', lb.x + lb.w / 2, lb.y + 23);
-    if (state.bannerT > 0) {
-      ctx.globalAlpha = Math.min(1, state.bannerT * 1.5); ctx.fillStyle = state.bannerCol;
-      ctx.font = '700 17px ui-monospace,Menlo,monospace'; ctx.textAlign = 'center';
-      ctx.fillText(state.banner, 470, 34); ctx.textAlign = 'left'; ctx.globalAlpha = 1;
-    }
-    if (state.buildMsgT > 0) {
-      ctx.globalAlpha = Math.min(1, state.buildMsgT * 2); ctx.fillStyle = '#ff6b5a';
-      ctx.font = '700 13px ui-monospace,Menlo,monospace';
-      ctx.fillText(state.buildMsg, VW / 2 + 100, VH - 58); ctx.globalAlpha = 1;
-    }
-    ctx.textAlign = 'left';
-  }
+  function handleBuildClick(x, y) { stratClick(x, y); }
+  function drawBuild() { drawStrategy(); }
 
   // ---- draw ----
   function drawSky() {
@@ -1830,6 +2341,8 @@
     get cityBuildings(){return cityBuildings;},
     get urban(){return urban;}, get road(){return road;}, get landMask(){return landMask;},
     get mapCanvas(){return mapCanvas;}, get cityCanvas(){return mapCanvas;}, get cityDirty(){return cityDirty;},
+    STR, stratInit, stratClick, stratKey, stratUpdate, drawStrategy, buildBoard, tileAtScreen,
+    launchBattle, resolvePlayerBattle, aiStep, flagCount, armyCount, tilesOf,
     HOSTILES, BATTLES, spawnHostiles, growHostilesAfterRound, tickBattles, resolveBattleWon, selectBattle, spawnBattleFor,
     get hoCells(){return hoCells;}, get hoOwner(){return hoOwner;}, battleForHostile, nearestOwnedRegion };
 })();
