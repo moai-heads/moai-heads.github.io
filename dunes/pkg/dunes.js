@@ -2155,7 +2155,7 @@ async function __wbg_init(module_or_path) {
     }
 
     if (module_or_path === undefined) {
-        module_or_path = new URL('dunes_bg.wasm?v=2c23c01', import.meta.url);
+        module_or_path = new URL('dunes_bg.wasm?v=b6f5472', import.meta.url);
     }
     const imports = __wbg_get_imports();
 
