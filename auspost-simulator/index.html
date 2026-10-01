@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#173867">
+<meta name="description" content="A slapstick arcade postie game. Yeet package. Fill out card. Escape.">
+<title>AusPost Simulator — Kookaburra OS 97</title>
+<style>
+  *{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#102a4b;color:#deedff}
+  body{display:grid;place-items:center;font:12px ui-monospace,SFMono-Regular,Consolas,monospace}
+  #desk{width:min(100vw,133.333333vh);height:min(100vh,75vw);position:relative;display:grid;place-items:center;overflow:hidden;background:#173867;box-shadow:0 0 0 1px #6b9aca,0 16px 60px #071323}
+  canvas{position:absolute;inset:0;width:100%;height:100%;min-width:0;min-height:0;display:block;image-rendering:pixelated;touch-action:none;outline:none}
+  #loading{position:absolute;inset:0;z-index:4;display:grid;place-items:center;background:#173867;color:#e2eeff;letter-spacing:.13em;transition:opacity .35s}
+  #loading small{display:block;margin-top:12px;text-align:center;color:#a9c8e8;letter-spacing:.04em}
+  #loading.hide{opacity:0;pointer-events:none}
+  #fs{position:fixed;right:14px;bottom:14px;z-index:5;border:1px solid #87afd7;background:#153b68;color:#e6f2ff;padding:9px 12px;font:11px ui-monospace,monospace;cursor:pointer;box-shadow:inset 1px 1px #bad6ef}
+  #fs:hover{background:#27588b}
+  @media(max-aspect-ratio:4/3){#fs{right:7px;bottom:7px;padding:7px 9px}}
+</style>
+</head>
+<body>
+<div id="desk">
+  <canvas id="canvas" tabindex="0" oncontextmenu="event.preventDefault()"></canvas>
+  <div id="loading">BOOTING KOOKABURRA OS 97<small>LOADING THE POST. THE POSTIE IS NOT AWAITING THE POST.</small></div>
+</div>
+<button id="fs" type="button">⛶ FULLSCREEN</button>
+<script>
+var Module={
+  canvas:document.getElementById('canvas'),
+  print: function(t){console.log(t)},
+  printErr:function(t){console.error(t)},
+  onRuntimeInitialized:function(){document.getElementById('loading').classList.add('hide');Module.canvas.focus()},
+  onAbort:function(){document.getElementById('loading').innerHTML='BOOT FAILED<small>THE COMPUTER SAYS NO. CHECK THE CONSOLE.</small>'}
+};
+const c=Module.canvas;
+c.addEventListener('pointerdown',()=>c.focus());
+document.getElementById('fs').addEventListener('click',()=>{if(!document.fullscreenElement)document.getElementById('desk').requestFullscreen?.();else document.exitFullscreen?.()});
+window.addEventListener('keydown',e=>{if(e.key==='Tab')e.preventDefault()});
+</script>
+<script async src="auspost.js"></script>
+</body>
+</html>
