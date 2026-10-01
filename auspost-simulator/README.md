@@ -1,17 +1,18 @@
 # AUSPOST SIMULATOR: DELIVERY ATTEMPT
 
-A small, playable C++17 + SDL3 arcade game, presented as an app on the fictional **Kookaburra OS 97** desktop. The web version is built with Emscripten and hosted at **https://moai-heads.github.io/auspost-simulator/**.
+A playable C++17 / SDL3 top-down delivery game, playable at **https://moai-heads.github.io/auspost-simulator/**. The suburb is drawn live by SDL from a tile-based ground map and interactive objects—there is no screenshot background.
 
 ## Play
 
-- **Enter / Start your shift** — start the five-stop route
-- **Mouse** — aim for the marked safe drop zone (arrow keys also nudge aim)
-- **Hold and release Space (or press and hold the gold on-screen button) — charge and throw the parcel; aim for the gold part of the meter
-- **Card:** arrow keys / **1–3** select fields, **Enter** moves through and stamps
-- **Escape:** hold **Left Arrow / A** to pedal; **Shift** to sprint
-- **Tab** — route map; **R** — start over
+- **Arrow keys / WASD:** walk the postie around the suburb; **Shift:** sprint.
+- **Mouse:** aim toward the marked safe-drop zone.
+- **Hold/release Space:** charge and throw. You must get close enough for the parcel to reach the drop zone.
+- **E:** recover a missed parcel or check the bike.
+- **Delivery card:** Up/Down choose a reason or pickup point; Left/Right switch fields; **Enter** advances/stamps. You can also click a choice.
+- Return to the bike after filing each card. Avoid the dog, garden obstacles, and suspicious residents.
+- **Tab:** route sheet; **R:** restart.
 
-Score balances a safe parcel, correct delivery card, clean escape, and remaining time. Getting caught costs time and points, never health.
+There are five addresses, throw range/wind, parcel recovery, obstacles, resident detection, a patrolling dog that raises suspicion, timed paperwork, and a shift score. Getting caught costs time; nobody gets hurt.
 
 ## Native build
 
@@ -25,13 +26,11 @@ cmake --build build
 
 ## Web build
 
-Requires Emscripten with its SDL3 port:
+Requires Emscripten and CMake:
 
 ```sh
 emcmake cmake -S . -B build-web -DCMAKE_BUILD_TYPE=Release
 cmake --build build-web
 ```
 
-The compiled web files (`auspost.js`, `auspost.wasm`, and `auspost.data`) are included beside `index.html`. This site is published from the `main` branch root, so the game is available under `/auspost-simulator/` after the Pages build completes.
-
-The supplied screenshot is used as the in-game suburban playfield; all menus, HUD, route, throw arc, parcel, card, and scoring logic are rendered live by SDL3. No external runtime service is needed.
+The compiled `auspost.js` and `auspost.wasm` sit beside `index.html` and are published from the main branch root under `/auspost-simulator/`.

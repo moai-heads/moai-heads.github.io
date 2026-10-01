@@ -5,640 +5,219 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
-#include <vector>
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
 #endif
 
 namespace {
-constexpr int W = 1448, H = 1086;
-constexpr int WORLD_X = 132, WORLD_Y = 254, WORLD_W = 1298, WORLD_H = 768;
-constexpr float THROW_X = 577.0f, THROW_Y = 694.0f;
-constexpr float PI = 3.1415926535f;
-struct Color { Uint8 r,g,b,a; };
-SDL_Window* window = nullptr;
-SDL_Renderer* renderer = nullptr;
-SDL_Texture* yard = nullptr;
-std::string capturePath;
-bool quitRequested = false;
-Uint64 previousTicks = 0;
+constexpr int W=960,H=720, TOP=72, BOTTOM=654;
+constexpr float PI=3.14159265f, TILE=32.0f;
+struct C { Uint8 r,g,b,a; };
+SDL_Window* win=nullptr; SDL_Renderer* ren=nullptr; SDL_Texture* mapTexture=nullptr;
+Uint64 prevTicks=0; bool quit=false, mapOpen=false, charging=false, pointerCharge=false;
+float anim=0, shiftTime=150, stopTime=28, charge=0, flightTime=0, flightLength=.72f;
+float px=70,py=610,vx=0,vy=0, aimX=190,aimY=270, throwX=70,throwY=610,landX=70,landY=610;
+float dogX=830,dogY=267, ownerX=0,ownerY=0, detect=0;
+int stop=0, score=0, stopScore=0, delivered=0, cleanCards=0, caught=0;
+int reason=0,pickup=0,cardField=0;
+bool hasParcel=true, parcelGround=false, parcelDelivered=false, ownerActive=false, caughtThisStop=false;
+float parcelX=0,parcelY=0, resultQuality=0;
+std::string status="BIKE READY. FIVE ADDRESSES. ABSOLUTELY NO COMMISSION.";
+enum class Mode { Title,Play,Flight,Card,Escape,Between,Summary };
+Mode mode=Mode::Title;
 
-Color ink{11,25,48,255}, lightBlue{118,174,228,255};
-Color white{228,239,247,255}, muted{137,169,203,255}, gold{255,225,60,255};
-Color green{87,221,147,255}, red{246,74,78,255}, orange{255,162,67,255};
+constexpr C ink{15,27,39,255}, paper{244,239,216,255}, white{242,245,232,255};
+constexpr C blue{56,118,166,255}, pale{178,211,223,255};
+constexpr C gold{255,218,74,255}, red{225,74,61,255}, green{80,192,115,255};
+void set(C c){SDL_SetRenderDrawColor(ren,c.r,c.g,c.b,c.a);}
+void rect(float x,float y,float w,float h,C c){SDL_FRect r{x,y,w,h};set(c);SDL_RenderFillRect(ren,&r);}
+void box(float x,float y,float w,float h,C c){SDL_FRect r{x,y,w,h};set(c);SDL_RenderRect(ren,&r);}
+void line(float x,float y,float xx,float yy,C c){set(c);SDL_RenderLine(ren,x,y,xx,yy);}
+void circle(float x,float y,float radius,C c){set(c);for(int dy=-(int)radius;dy<=(int)radius;dy++){int dx=(int)std::sqrt(std::max(0.0f,radius*radius-dy*dy));SDL_RenderLine(ren,x-dx,y+dy,x+dx,y+dy);}}
 
-void color(Color c) { SDL_SetRenderDrawColor(renderer,c.r,c.g,c.b,c.a); }
-void fill(float x,float y,float w,float h,Color c) {
-    SDL_FRect r{x,y,w,h}; color(c); SDL_RenderFillRect(renderer,&r);
-}
-void outline(float x,float y,float w,float h,Color c) {
-    SDL_FRect r{x,y,w,h}; color(c); SDL_RenderRect(renderer,&r);
-}
-void line(float x1,float y1,float x2,float y2,Color c) {
-    color(c); SDL_RenderLine(renderer,x1,y1,x2,y2);
-}
-void bevel(int x,int y,int w,int h,Color base,bool raised=true) {
-    fill(x,y,w,h,base);
-    Color hi = raised ? Color{152,193,230,255} : Color{20,41,68,255};
-    Color lo = raised ? Color{17,37,65,255} : Color{112,158,209,255};
-    fill(x,y,w,2,hi); fill(x,y,2,h,hi);
-    fill(x+w-2,y,2,h,lo); fill(x,y+h-2,w,2,lo);
-    fill(x+3,y+3,w-6,1,raised?Color{72,117,171,255}:Color{8,22,42,255});
-}
-
-std::array<Uint8,7> glyph(char ch) {
-    if(ch>='a'&&ch<='z') ch=char(ch-'a'+'A');
-#define G(c,a,b,d,e,f,g,h) case c: return {a,b,d,e,f,g,h}
-    switch(ch) {
-    G('A',14,17,17,31,17,17,17); G('B',30,17,17,30,17,17,30);
-    G('C',14,17,16,16,16,17,14); G('D',30,17,17,17,17,17,30);
-    G('E',31,16,16,30,16,16,31); G('F',31,16,16,30,16,16,16);
-    G('G',14,17,16,23,17,17,15); G('H',17,17,17,31,17,17,17);
-    G('I',14,4,4,4,4,4,14); G('J',7,2,2,2,18,18,12);
-    G('K',17,18,20,24,20,18,17); G('L',16,16,16,16,16,16,31);
-    G('M',17,27,21,21,17,17,17); G('N',17,25,25,21,19,19,17);
-    G('O',14,17,17,17,17,17,14); G('P',30,17,17,30,16,16,16);
-    G('Q',14,17,17,17,21,18,13); G('R',30,17,17,30,20,18,17);
-    G('S',15,16,16,14,1,1,30); G('T',31,4,4,4,4,4,4);
-    G('U',17,17,17,17,17,17,14); G('V',17,17,17,17,17,10,4);
-    G('W',17,17,17,21,21,21,10); G('X',17,17,10,4,10,17,17);
-    G('Y',17,17,10,4,4,4,4); G('Z',31,1,2,4,8,16,31);
-    G('0',14,17,19,21,25,17,14); G('1',4,12,4,4,4,4,14);
-    G('2',14,17,1,2,4,8,31); G('3',30,1,1,14,1,1,30);
-    G('4',2,6,10,18,31,2,2); G('5',31,16,16,30,1,1,30);
-    G('6',14,16,16,30,17,17,14); G('7',31,1,2,4,8,8,8);
-    G('8',14,17,17,14,17,17,14); G('9',14,17,17,15,1,1,14);
-    G('-',0,0,0,31,0,0,0); G('_',0,0,0,0,0,0,31);
-    G('.',0,0,0,0,0,12,12); G(',',0,0,0,0,4,4,8);
-    G(':',0,12,12,0,12,12,0); G(';',0,12,12,0,4,4,8);
-    G('!',4,4,4,4,4,0,4); G('?',14,17,1,2,4,0,4);
-    G('/',1,2,2,4,8,8,16); G('\\',16,8,8,4,2,2,1);
-    G('(',2,4,8,8,8,4,2); G(')',8,4,2,2,2,4,8);
-    G('=',0,31,0,31,0,0,0); G('+',0,4,4,31,4,4,0);
-    G('>',16,8,4,2,4,8,16); G('<',1,2,4,8,4,2,1);
-    G('"',10,10,10,0,0,0,0); G('\'',4,4,8,0,0,0,0);
-    G('#',10,31,10,10,31,10,0); G('*',0,21,14,31,14,21,0);
-    G('[',14,8,8,8,8,8,14); G(']',14,2,2,2,2,2,14);
-    G('%',17,2,4,8,17,0,0); G('@',14,17,23,21,23,16,14);
-    default: return {0,0,0,0,0,0,0};
-    }
+std::array<Uint8,7> glyph(char ch){
+ if(ch>='a'&&ch<='z')ch=char(ch-'a'+'A');
+#define G(c,a,b,d,e,f,g,h) case c:return {a,b,d,e,f,g,h}
+ switch(ch){
+ G('A',14,17,17,31,17,17,17);G('B',30,17,17,30,17,17,30);G('C',14,17,16,16,16,17,14);G('D',30,17,17,17,17,17,30);
+ G('E',31,16,16,30,16,16,31);G('F',31,16,16,30,16,16,16);G('G',14,17,16,23,17,17,15);G('H',17,17,17,31,17,17,17);
+ G('I',14,4,4,4,4,4,14);G('J',7,2,2,2,18,18,12);G('K',17,18,20,24,20,18,17);G('L',16,16,16,16,16,16,31);
+ G('M',17,27,21,21,17,17,17);G('N',17,25,25,21,19,19,17);G('O',14,17,17,17,17,17,14);G('P',30,17,17,30,16,16,16);
+ G('Q',14,17,17,17,21,18,13);G('R',30,17,17,30,20,18,17);G('S',15,16,16,14,1,1,30);G('T',31,4,4,4,4,4,4);
+ G('U',17,17,17,17,17,17,14);G('V',17,17,17,17,17,10,4);G('W',17,17,17,21,21,21,10);G('X',17,17,10,4,10,17,17);
+ G('Y',17,17,10,4,4,4,4);G('Z',31,1,2,4,8,16,31);
+ G('0',14,17,19,21,25,17,14);G('1',4,12,4,4,4,4,14);G('2',14,17,1,2,4,8,31);G('3',30,1,1,14,1,1,30);
+ G('4',2,6,10,18,31,2,2);G('5',31,16,16,30,1,1,30);G('6',14,16,16,30,17,17,14);G('7',31,1,2,4,8,8,8);
+ G('8',14,17,17,14,17,17,14);G('9',14,17,17,15,1,1,14);
+ G('-',0,0,0,31,0,0,0);G('_',0,0,0,0,0,0,31);G('.',0,0,0,0,0,12,12);G(',',0,0,0,0,4,4,8);
+ G(':',0,12,12,0,12,12,0);G('!',4,4,4,4,4,0,4);G('?',14,17,1,2,4,0,4);
+ G('/',1,2,2,4,8,8,16);G('+',0,4,4,31,4,4,0);G('=',0,31,0,31,0,0,0);G('(',2,4,8,8,8,4,2);G(')',8,4,2,2,2,4,8);
+ G('"',10,10,10,0,0,0,0);G('\'',4,4,8,0,0,0,0);G('#',10,31,10,10,31,10,0);G('%',17,2,4,8,17,0,0);
+ default:return {0,0,0,0,0,0,0}; }
 #undef G
 }
-void text(const std::string& s,int x,int y,int scale,Color c) {
-    int ox=x;
-    for(unsigned char raw:s) {
-        char ch=(char)raw;
-        if(ch=='\n'){y+=scale*10;x=ox;continue;}
-        if(ch==' '){x+=scale*6;continue;}
-        auto rows=glyph(ch);
-        for(int yy=0;yy<7;++yy) for(int xx=0;xx<5;++xx)
-            if(rows[yy]&(1u<<(4-xx))) fill(x+xx*scale,y+yy*scale,scale,scale,c);
-        x+=scale*6;
-    }
-}
-int tw(const std::string&s,int scale){return (int)s.size()*scale*6;}
-void centerText(const std::string&s,int cx,int y,int scale,Color c){text(s,cx-tw(s,scale)/2,y,scale,c);}
-void dashedRect(int x,int y,int w,int h,Color c,int dash=12) {
-    for(int p=0;p<w;p+=dash*2){fill(x+p,y,std::min(dash,w-p),3,c);fill(x+p,y+h-3,std::min(dash,w-p),3,c);}
-    for(int p=0;p<h;p+=dash*2){fill(x,y+p,3,std::min(dash,h-p),c);fill(x+w-3,y+p,3,std::min(dash,h-p),c);}
-}
-void button(int x,int y,int w,int h,const std::string& label,bool hot=false) {
-    bevel(x,y,w,h,hot?Color{170,135,25,255}:Color{30,70,119,255},true);
-    centerText(label,x+w/2,y+(h-14)/2,2,hot?Color{255,241,135,255}:white);
-}
-
-struct Stop {
-    const char* suburb; const char* address; const char* note; const char* safeName;
-    float zx,zy; int reason,pickup; float wind; bool rain;
-};
-const std::array<Stop,5> route{{
-    {"QUIET CRESCENT","17 WATTLEBIRD WAY","NO ANSWER. SIGNATURE REQUIRED.","FRONT PORCH",1188,624,0,0,0.00f,false},
-    {"WINDY COURT","4/2 GUMTREE LANE","GUSTY! PARCEL MUST STAY DRY.","LETTERBOX",1094,845,1,1,0.38f,false},
-    {"UNIT BLOCK","UNIT 3, 88 CREEK RD","FRONT DOOR LOCKED. SIGNATURE ITEM.","DOORSTEP",1180,616,2,2,-0.14f,false},
-    {"RAINY AFTERNOON","9 MAGPIE PARADE","NO ANSWER. USE A SAFE PLACE.","UNDER AWNING",1120,588,0,0,0.12f,true},
-    {"LAST RUN","2 KOOKABURRA CRT","LAST PARCEL. THE DOG KNOWS.","FRONT PORCH",1188,624,1,1,-0.30f,true}
+void text(const std::string&s,int x,int y,int z,C c){int ox=x;for(char ch:s){if(ch=='\n'){x=ox;y+=z*10;continue;}if(ch==' '){x+=z*6;continue;}auto g=glyph(ch);for(int j=0;j<7;j++)for(int i=0;i<5;i++)if(g[j]&(1u<<(4-i)))rect(x+i*z,y+j*z,z,z,c);x+=z*6;}}
+void center(const std::string&s,int x,int y,int z,C c){text(s,x-(int)s.size()*z*6/2,y,z,c);}
+float dist(float x,float y,float xx,float yy){return std::hypot(x-xx,y-yy);}
+float clampf(float x,float a,float b){return std::clamp(x,a,b);}
+struct House{float x,y,w,h;float sx,sy;const char*addr;const char*note;const char*spot;int reason,pickup;};
+const std::array<House,5> houses{{
+ {122,108,142,112,193,270,"17 WATTLEBIRD WAY","NO ANSWER. SIGNATURE ITEM.","FRONT PORCH",0,0},
+ {407,108,142,112,478,270,"4/2 GUMTREE LANE","GUSTY. KEEP THE PARCEL DRY.","LETTERBOX",1,1},
+ {696,108,142,112,767,270,"UNIT 3, 88 CREEK RD","THE DOG KNOWS YOUR ROUTE.","DOORSTEP",2,2},
+ {322,482,142,112,393,456,"9 MAGPIE PARADE","NO ANSWER. USE A SAFE PLACE.","UNDER AWNING",0,0},
+ {679,482,142,112,750,456,"2 KOOKABURRA CRT","LAST PARCEL. LAST CHANCE.","FRONT PORCH",1,1}
 }};
-const char* reasonOptions[] = {"NO ANSWER","UNSAFE TO LEAVE","SIGNATURE REQUIRED"};
-const char* pickupOptions[] = {"KOOKABURRA LPO","RIVERSIDE PARCEL LOCKER","CENTRAL DEPOT"};
+const char* reasons[]={"NO ANSWER","UNSAFE TO LEAVE","SIGNATURE REQUIRED"};
+const char* pickups[]={"KOOKABURRA LPO","PARCEL LOCKER","CENTRAL DEPOT"};
+struct Tree{float x,y,r;};
+const std::array<Tree,11> trees{{{77,151,19},{332,150,18},{620,155,20},{882,151,20},{350,275,18},{612,275,19},{886,275,19},{79,477,20},{525,520,20},{589,509,18},{884,526,20}}};
 
-enum class Phase { Welcome, Aim, Flight, Card, Escape, Between, Summary };
-Phase phase=Phase::Welcome;
-int stopIndex=0, totalScore=0, runScore=0, deliveries=0, cleanCards=0, caughtCount=0;
-float shiftSeconds=82.0f, stopSeconds=22.0f, detection=0.12f;
-float charge=0.0f, flightT=0.0f, flightDuration=0.95f, escapeProgress=0.0f;
-float targetX=1188,targetY=624, resultQuality=0.0f, messageTimer=0.0f;
-int cardReason=0, cardPickup=0, cardField=0, mistakes=0;
-bool charging=false, pointerCharging=false, parcelSafe=false, cardAccurate=false, cleanEscape=true, showingMap=false;
-std::string statusMessage="DELIVERING A BRIGHTER TOMORROW (PROBABLY)";
-float animation=0;
+void startStop(){mode=Mode::Play;stopTime=28;charge=0;charging=false;pointerCharge=false;hasParcel=true;parcelGround=false;parcelDelivered=false;ownerActive=false;caughtThisStop=false;detect=.04f;reason=0;pickup=0;cardField=0;aimX=houses[stop].sx;aimY=houses[stop].sy;status=std::string("NEXT: ")+houses[stop].addr+"  /  FIND THE GOLD DROP MARK";}
+void startShift(){stop=score=stopScore=delivered=cleanCards=caught=0;shiftTime=150;px=70;py=610;dogX=830;dogY=267;mapOpen=false;startStop();}
+void caughtPenalty(){if(caughtThisStop)return;caughtThisStop=true;caught++;shiftTime=std::max(0.0f,shiftTime-6);detect=.45f;status="CAUGHT! APOLOGISE, LOSE SIX SECONDS, KEEP PEDALLING.";}
 
-void beginStop() {
-    phase=Phase::Aim; stopSeconds=22.0f; charge=0; charging=false; pointerCharging=false; flightT=0;
-    const Stop&s=route[stopIndex]; targetX=s.zx; targetY=s.zy;
-    cardReason=0; cardPickup=0; cardField=0; mistakes=0; escapeProgress=0; cleanEscape=true;
-    statusMessage=std::string("ROUTE ")+std::to_string(stopIndex+1)+" / "+s.suburb;
+bool insideHouse(float x,float y,float r){for(const auto&h:houses)if(x+r>h.x&&x-r<h.x+h.w&&y+r>h.y&&y-r<h.y+h.h)return true;return false;}
+bool solid(float x,float y){constexpr float r=10;if(x<18||x>942||y<TOP+12||y>BOTTOM-12)return true;if(insideHouse(x,y,r))return true;
+ for(auto t:trees)if(dist(x,y,t.x,t.y)<t.r+8)return true;
+ // Low garden fences have a walk-through gate aligned with each front path.
+ for(int i=0;i<5;i++){const auto&h=houses[i];float fy=i<3?298:465;float lo=h.x-18,hi=h.x+h.w+18;if(std::abs(y-fy)<8&&x>lo&&x<hi&&std::abs(x-h.sx)>23)return true;}
+ return false;}
+void movePlayer(float dx,float dy){float nx=px+dx,ny=py+dy;if(!solid(nx,py))px=nx;if(!solid(px,ny))py=ny;}
+float windForStop(){return stop==1?.30f:stop==3?.12f:stop==4?-.18f:0.0f;}
+float throwRange(){return 72.0f+charge*330.0f;}
+void launch(){if(mode!=Mode::Play||!hasParcel)return;charging=false;pointerCharge=false;mode=Mode::Flight;flightTime=0;throwX=px;throwY=py;
+ float dx=aimX-px,dy=aimY-py,d=std::hypot(dx,dy);if(d<1){dx=1;dy=0;d=1;}float r=std::min(d,throwRange());float wind=windForStop()*charge*75.0f;
+ landX=px+dx/d*r+wind;landY=py+dy/d*r;landX=clampf(landX,20,940);landY=clampf(landY,TOP+10,BOTTOM-10);flightLength=clampf(.36f+d/560.0f,.42f,1.2f);hasParcel=false;status="PARCEL AIRBORNE. POSTIE, PLEASE DO NOT PANIC.";}
+bool hazardAt(float x,float y){if(insideHouse(x,y,1))return true;for(auto t:trees)if(dist(x,y,t.x,t.y)<t.r+4)return true;return false;}
+void beginCard(){mode=Mode::Card;stopTime=std::min(stopTime,13.0f);reason=0;pickup=0;cardField=0;ownerActive=true;const House&h=houses[stop];ownerX=h.sx;ownerY=h.sy+(stop<3?35:-35);status="CARD OUT! PICK THE REASON AND COLLECTION POINT.";}
+void landParcel(){parcelX=landX;parcelY=landY;const House&h=houses[stop];float miss=dist(landX,landY,h.sx,h.sy);bool reachable=dist(throwX,throwY,h.sx,h.sy)<=throwRange()+14;
+ bool safe=miss<42&&reachable&&!hazardAt(landX,landY);
+ resultQuality=clampf(1.0f-miss/90.0f,0.0f,1.0f);
+ if(safe){parcelDelivered=true;parcelGround=false;delivered++;beginCard();}
+ else{mode=Mode::Play;parcelGround=true;hasParcel=false;status=hazardAt(landX,landY)?"BONK! TREE / ROOF / GNOME. PRESS E NEAR PARCEL TO RETRY.":"MISSED THE SAFE ZONE. PRESS E NEAR PARCEL TO RETRY.";}
 }
-void startShift() {
-    stopIndex=0; totalScore=0; runScore=0; deliveries=0; cleanCards=0; caughtCount=0;
-    shiftSeconds=82.0f; detection=0.12f; showingMap=false; beginStop();
-}
-void beginCard() {
-    phase=Phase::Card; cardReason=0; cardPickup=0; cardField=0;
-    statusMessage="CARD UP! A FORM IS JUST A SMALLER ENVELOPE.";
-}
-void launchParcel() {
-    if(phase!=Phase::Aim) return;
-    charging=false; phase=Phase::Flight; flightT=0;
-    float d=std::hypot(targetX-THROW_X,targetY-THROW_Y);
-    flightDuration=std::clamp(d/690.0f,0.70f,1.55f);
-    statusMessage="AIRBORNE. PLEASE DO NOT WRITE 'FRAGILE' ON THE DOG.";
-}
-void landParcel() {
-    const Stop&s=route[stopIndex];
-    float d=std::hypot(targetX-s.zx,targetY-s.zy);
-    float chargePenalty=std::abs(charge-0.66f);
-    // The clear target ring is forgiving; power rewards a well-timed release.
-    parcelSafe=(d<75.0f && chargePenalty<0.27f);
-    resultQuality=std::clamp(1.0f-d/190.0f-chargePenalty*0.75f,0.0f,1.0f);
-    if(d>120 && std::hypot(targetX-918,targetY-773)<125) {
-        statusMessage="THE DOG HAS OPINIONS ABOUT YOUR DELIVERY.";
-        detection=std::min(1.0f,detection+0.22f);
-    } else if(parcelSafe) statusMessage="THUMP! A PERFECTLY UNOFFICIAL SAFE PLACE.";
-    else statusMessage="MISSED THE MARK. PAPERWORK WILL HEAR ABOUT THIS.";
-    if(parcelSafe) deliveries++;
-    beginCard();
-}
-void stampCard(bool timedOut=false) {
-    if(phase!=Phase::Card) return;
-    const Stop&s=route[stopIndex];
-    cardAccurate=!timedOut && cardReason==s.reason && cardPickup==s.pickup;
-    if(cardAccurate) cleanCards++;
-    else { mistakes++; detection=std::min(1.0f,detection+0.12f); }
-    statusMessage=cardAccurate?"KA-CHUNK! THE PAPERWORK IS LEGALLY LEGIBLE.":"STAMPED. PROBABLY GOING TO THE WRONG POST OFFICE.";
-    phase=Phase::Escape; escapeProgress=0; cleanEscape=true;
-}
-void finishStop() {
-    int pts=55;
-    if(parcelSafe) pts+=120+(int)(resultQuality*60);
-    else pts-=35;
-    if(cardAccurate) pts+=90; else pts-=40;
-    if(cleanEscape) pts+=70;
-    if(stopSeconds>12) pts+=40;
-    else if(stopSeconds<4) pts-=20;
-    pts=std::max(0,pts);
-    runScore=pts; totalScore+=pts;
-    phase=Phase::Between;
-    statusMessage="STOP COMPLETE. NOBODY WAS HARMED. ONLY THE SCORE.";
-}
-void nextStop() {
-    if(stopIndex+1<(int)route.size() && shiftSeconds>0) {
-        ++stopIndex; beginStop();
-    } else { phase=Phase::Summary; statusMessage="SHIFT COMPLETE. FILE YOUR OWN COMPLAINT."; }
-}
-void targetClamp(){targetX=std::clamp(targetX,(float)WORLD_X+24,(float)(WORLD_X+WORLD_W-24));targetY=std::clamp(targetY,(float)WORLD_Y+24,(float)(WORLD_Y+WORLD_H-24));}
+void stamp(){if(mode!=Mode::Card)return;const House&h=houses[stop];bool good=reason==h.reason&&pickup==h.pickup;if(good)cleanCards++;else{detect=std::min(1.0f,detect+.18f);status="FORM FILED. IN ANOTHER POSTCODE, APPARENTLY.";}
+ stopScore=45+(parcelDelivered?145+(int)(resultQuality*45):-35)+(good?85:-30)+(shiftTime>55?35:0);score+=std::max(0,stopScore);mode=Mode::Escape;caughtThisStop=false;status=good?"KA-CHUNK! NOW GET BACK TO YOUR BIKE.":"STAMPED. BIKE IS THAT WAY. QUICKLY.";}
+void finishStop(){mode=Mode::Between;status="BACK AT THE BIKE. ROUTE SHEET UPDATED.";}
+void nextStop(){if(stop+1>=5||shiftTime<=0){mode=Mode::Summary;status="SHIFT COMPLETE. FILE YOUR OWN COMPLAINT.";return;}stop++;px=70;py=610;startStop();}
 
-void drawBird(int x,int y,int s,Color c) {
-    // Tiny kookaburra silhouette, assembled from intentionally chunky pixels.
-    fill(x+3*s,y+2*s,6*s,3*s,c); fill(x+1*s,y+4*s,8*s,4*s,c);
-    fill(x+4*s,y+7*s,4*s,3*s,c); fill(x+7*s,y+3*s,6*s,2*s,Color{237,185,101,255});
-    fill(x+6*s,y+1*s,2*s,2*s,Color{251,251,238,255});
-    fill(x+7*s,y+1*s,s,s,Color{15,23,34,255});
-    fill(x+3*s,y+10*s,2*s,s,c); fill(x+8*s,y+10*s,2*s,s,c);
+void drawGround(){rect(0,TOP,W,BOTTOM-TOP,C{83,145,80,255});
+ // Repeating grass is generated from the map grid, not loaded from a backdrop.
+ for(int y=TOP;y<BOTTOM;y+=TILE)for(int x=0;x<W;x+=TILE){unsigned n=(unsigned)(x*73856093u)^(unsigned)(y*19349663u);int v=(n%7)-3;rect(x,y,TILE,TILE,C{(Uint8)(83+v),(Uint8)(145+v*2),(Uint8)(78+v),255});if(n%3==0)rect(x+(n%23),y+((n>>8)%24),2,2,C{105,164,91,255});}
+ // kerbs, broad asphalt, lane markings, and a painted crossing
+ rect(0,310,W,17,C{183,179,137,255});rect(0,327,W,78,C{62,72,75,255});rect(0,405,W,17,C{183,179,137,255});
+ for(int x=12;x<W;x+=58)rect(x,365,30,3,C{221,211,159,255});
+ for(int i=0;i<6;i++)rect(438+i*16,333,9,65,C{214,210,178,255});
+ // paths from each porch, through the gate, to the footpath
+ for(int i=0;i<5;i++){const House&h=houses[i];float start=i<3?h.y+h.h:h.y;float end=i<3?298:465;float y=std::min(start,end),hh=std::abs(end-start);rect(h.sx-14,y,28,hh,C{185,171,135,255});rect(h.sx-2,y,4,hh,C{208,196,158,255});}
+ rect(52,594,88,42,C{179,174,136,255});rect(54,596,84,38,C{193,186,146,255});rect(108,418,24,178,C{181,173,139,255});rect(111,418,4,178,C{204,195,157,255});
 }
-void drawDesktop() {
-    fill(0,0,W,H,Color{26,65,113,255});
-    // Early-90s brushed desktop, faint tile and grain.
-    for(int y=56;y<H;y+=40) line(0,y,W,y,Color{30,73,123,255});
-    for(int x=120;x<W;x+=48) line(x,56,x,H,Color{28,69,118,255});
-    fill(0,0,W,54,Color{38,88,149,255});
-    fill(0,51,W,3,Color{111,160,213,255});
-    drawBird(16,8,3,Color{10,25,45,255});
-    text("KOOKABURRA OS 97",142,13,4,Color{7,21,40,255});
-    text("SMALL COUNTRY. BIG IDEAS.",800,21,2,Color{177,211,241,255});
-    fill(1127,0,321,52,Color{75,123,181,255});
-    outline(1128,1,318,50,Color{146,188,226,255});
-    text("WED 14 MAY 1997   10:24 AM",1140,17,2,Color{12,28,48,255});
-    // Desktop app icons in the blue rail.
-    struct Icon {const char* label; Color body; int kind;};
-    const Icon icons[]={{"MY STUFF",{91,169,224,255},0},{"LETTERS",{249,202,98,255},1},
-        {"AUSSIE NET",{67,178,106,255},2},{"NOTEPAD",{230,232,223,255},3},
-        {"PIC VIEWER",{127,189,222,255},4},{"SETTINGS",{179,192,205,255},5},{"BIN",{170,179,189,255},6}};
-    int yy=96;
-    for(int i=0;i<7;i++) {
-        int ix=31, iy=yy+i*111;
-        if(i==0){drawBird(ix,iy,3,Color{238,243,238,255});fill(ix+38,iy+18,25,18,Color{245,248,242,255});outline(ix+38,iy+18,25,18,Color{14,34,58,255});}
-        else if(i==1){bevel(ix,iy+7,58,38,icons[i].body,true);fill(ix+4,iy+4,18,8,Color{255,226,139,255});}
-        else if(i==2){SDL_FRect r{(float)ix+8,(float)iy+2,43,43};color(Color{32,111,221,255});SDL_RenderFillRect(renderer,&r);outline(ix+8,iy+2,43,43,Color{21,43,75,255});fill(ix+15,iy+13,28,6,Color{102,204,255,255});}
-        else if(i==3){bevel(ix+8,iy,42,49,Color{241,243,232,255},true);for(int k=0;k<4;k++)line(ix+15,iy+13+k*7,ix+43,iy+13+k*7,Color{73,99,125,255});}
-        else if(i==4){bevel(ix,iy+1,59,40,Color{220,230,232,255},true);fill(ix+4,iy+5,51,30,Color{63,138,190,255});fill(ix+6,iy+27,48,8,Color{92,153,73,255});}
-        else if(i==5){SDL_FRect r{(float)ix+6,(float)iy+1,45,45};color(Color{164,184,204,255});SDL_RenderFillRect(renderer,&r);outline(ix+6,iy+1,45,45,Color{31,48,66,255});for(int k=0;k<8;k++)line(ix+18,iy+4+k*5,ix+39,iy+4+k*5,Color{61,83,105,255});}
-        else {bevel(ix+12,iy,35,48,Color{184,194,200,255},true);fill(ix+16,iy+8,27,34,Color{123,143,154,255});}
-        centerText(icons[i].label,60,iy+59,1,white);
-    }
-    // The framed program window.
-    bevel(121,59,1312,1015,Color{30,75,130,255},true);
-    fill(130,68,1294,35,Color{56,106,169,255});
-    drawBird(138,73,2,Color{19,37,60,255});
-    text("AUSPOST SIMULATOR: DELIVERY ATTEMPT",198,77,3,Color{9,25,48,255});
-    text("_",1350,74,3,white); outline(1346,70,33,28,Color{152,193,229,255});
-    text("X",1393,76,3,white); outline(1387,70,33,28,Color{152,193,229,255});
-    // App footer/status bar.
-    fill(132,1030,1298,37,Color{45,92,151,255});
-    fill(132,1030,1298,2,Color{145,185,223,255});
-    bevel(143,1037,31,23,Color{218,234,244,255},true);
-    text("+",150,1041,2,Color{23,48,76,255});
-    text(statusMessage,194,1042,2,white);
-    drawBird(1248,1038,2,Color{16,31,51,255});
-    text("KOOKABURRA OS 97",1290,1042,2,Color{13,30,51,255});
+void drawTree(Tree t){circle(t.x,t.y+8,t.r+3,C{47,93,48,255});circle(t.x,t.y,t.r,C{38,105,56,255});circle(t.x-7,t.y-5,t.r*.62f,C{61,135,67,255});circle(t.x+8,t.y-7,t.r*.53f,C{77,149,72,255});circle(t.x,t.y-12,3,C{140,180,84,255});}
+void drawHouse(int i){const House&h=houses[i];bool top=i<3;float fy=top?298:465;
+ // lawns, garden border, picket fence and an open gate aligned to the path
+ rect(h.x-20,top?84:437,h.w+40,top?220:214,C{95,159,83,255});
+ for(float x=h.x-18;x<h.x+h.w+18;x+=14){if(std::abs(x-h.sx)<25)continue;rect(x,fy-3,3,9,C{222,211,169,255});rect(x-2,fy-3,7,2,C{235,224,189,255});}
+ rect(h.x-18,top?91:590,3,top?207:0,C{222,211,169,255});rect(h.x+h.w+15,top?91:590,3,top?207:0,C{222,211,169,255});
+ // roof silhouette + eaves + wall sides gives a readable overhead house footprint
+ rect(h.x-5,h.y+8,h.w+10,h.h+8,C{104,67,48,255});rect(h.x,h.y,h.w,h.h,C{188,91,62,255});
+ rect(h.x+5,h.y+5,h.w-10,h.h-10,C{172,75,57,255});
+ for(int yy=0;yy<3;yy++)rect(h.x+7,h.y+12+yy*28,h.w-14,3,C{145,62,50,255});
+ for(int xx=0;xx<3;xx++)rect(h.x+24+xx*40,h.y+8,3,h.h-16,C{145,62,50,255});
+ // pitched-looking roof ridge + chimney
+ rect(h.x+12,h.y+12,h.w-24,5,C{215,125,77,255});rect(h.x+12,h.y+h.h-16,h.w-24,5,C{215,125,77,255});
+ rect(h.x+17,h.y+35,24,19,C{91,169,180,255});box(h.x+17,h.y+35,24,19,C{239,205,145,255});line(h.x+29,h.y+36,h.x+29,h.y+53,C{239,205,145,255});line(h.x+18,h.y+44,h.x+39,h.y+44,C{239,205,145,255});
+ rect(h.x+h.w-41,h.y+35,24,19,C{91,169,180,255});box(h.x+h.w-41,h.y+35,24,19,C{239,205,145,255});line(h.x+h.w-29,h.y+36,h.x+h.w-29,h.y+53,C{239,205,145,255});line(h.x+h.w-40,h.y+44,h.x+h.w-19,h.y+44,C{239,205,145,255});
+ // front door points toward the pavement
+ float dy=top?h.y+h.h-3:h.y-14;rect(h.sx-10,dy,20,21,C{91,57,41,255});rect(h.sx-7,dy+3,14,17,C{137,88,51,255});circle(h.sx+4,dy+11,1.8f,gold);
+ // porch and parcel drop mark
+ if(top)rect(h.sx-20,h.y+h.h+5,40,12,C{223,208,170,255});else rect(h.sx-20,h.y-13,40,12,C{223,208,170,255});
+ // letterbox beside the front walk
+ rect(h.sx+27,h.sy-4,6,18,C{63,73,79,255});rect(h.sx+22,h.sy-12,16,10,C{203,62,52,255});rect(h.sx+25,h.sy-9,10,3,C{235,220,180,255});
+ // gnome: harmlessly suspicious and a genuine throw obstacle
+ float gx=h.sx-48,gy=h.sy+20;circle(gx,gy,8,C{227,205,158,255});rect(gx-6,gy-2,12,10,C{58,111,172,255});rect(gx-5,gy-12,10,8,C{191,57,50,255});circle(gx,gy-13,4,C{200,71,55,255});
 }
-void drawPanel(int x,int y,int w,int h,const char* title) {
-    bevel(x,y,w,h,Color{5,19,37,255},true);
-    text(title,x+12,y+12,2,Color{181,214,243,255});
+void drawBike(){circle(51,610,10,C{23,33,39,255});circle(100,610,10,C{23,33,39,255});circle(51,610,6,C{171,187,178,255});circle(100,610,6,C{171,187,178,255});line(51,610,70,588,C{57,78,87,255});line(70,588,100,610,C{57,78,87,255});line(51,610,82,610,C{57,78,87,255});line(70,588,82,610,C{57,78,87,255});line(65,585,76,585,C{24,36,41,255});line(95,602,103,598,C{24,36,41,255});rect(72,580,19,15,C{201,52,45,255});rect(75,583,12,4,C{244,218,71,255});}
+void drawPostie(){circle(px,py+8,11,C{37,69,48,170});int step=(int)(anim*11)%2;rect(px-5+step,py+3,4,8,C{39,53,70,255});rect(px+1-step,py+3,4,8,C{39,53,70,255});rect(px-8,py-8,16,15,C{38,105,176,255});rect(px-10,py-5,4,9,C{233,187,144,255});rect(px+6,py-5,4,9,C{233,187,144,255});rect(px-7,py-17,14,10,C{225,185,142,255});rect(px-9,py-19,18,5,C{203,52,44,255});rect(px-5,py-23,10,5,C{203,52,44,255});rect(px+5,py-4,5,8,C{189,51,45,255});rect(px-3,py-15,2,2,ink);rect(px+3,py-15,2,2,ink);if(hasParcel){rect(px+9,py-8,9,9,C{169,111,56,255});line(px+13,py-8,px+13,py+1,C{211,69,56,255});}}
+void drawDog(){float x=830+std::sin(anim*1.3f)*22,y=270+std::sin(anim*2.1f)*8;dogX=x;dogY=y;circle(x,y+4,12,C{46,42,36,190});rect(x-10,y-8,20,15,C{198,153,93,255});circle(x+7,y-6,7,C{210,165,99,255});rect(x-9,y+5,4,8,C{95,69,49,255});rect(x+5,y+5,4,8,C{95,69,49,255});circle(x+9,y-7,1.5f,ink);line(x-9,y-5,x-15,y-11,C{198,153,93,255});if(stop==2){center("!",(int)x,(int)y-28,2,red);}}
+void drawOwner(){if(!ownerActive)return;circle(ownerX,ownerY+6,10,C{44,56,44,160});rect(ownerX-7,ownerY-8,14,15,C{207,149,92,255});rect(ownerX-9,ownerY-17,18,10,C{240,213,164,255});rect(ownerX-9,ownerY-19,18,5,C{74,116,75,255});circle(ownerX-3,ownerY-13,1.5f,ink);circle(ownerX+3,ownerY-13,1.5f,ink);}
+void drawTarget(){if(mode!=Mode::Play&&mode!=Mode::Flight)return;const House&h=houses[stop];for(int i=0;i<4;i++){float angle=anim*1.6f+i*PI/2;float x=h.sx+std::cos(angle)*25,y=h.sy+std::sin(angle)*18;circle(x,y,3,gold);}box(h.sx-22,h.sy-16,44,32,C{255,230,102,230});center(h.spot,(int)h.sx,(int)h.sy-32,1,white);
+ if(mode==Mode::Play&&hasParcel){float d=dist(px,py,aimX,aimY),r=std::min(d,throwRange());float x=px+(aimX-px)/(d?d:1)*r,y=py+(aimY-py)/(d?d:1)*r;for(int i=0;i<13;i+=2){float t=i/12.0f;circle(px+(x-px)*t,py+(y-py)*t-std::sin(PI*t)*(32+charge*25),2,C{255,240,171,230});}box(x-5,y-5,10,10,gold);}}
+void drawParcelAt(float x,float y,float z){circle(x,y+2,10,C{35,40,31,140});rect(x-8,y-8-z,16,16,C{173,116,59,255});rect(x-8,y-8-z,16,3,C{224,170,97,255});rect(x-1,y-8-z,4,16,C{203,57,48,255});box(x-8,y-8-z,16,16,C{98,67,43,255});}
+void drawStaticWorld(){drawGround();for(int i=0;i<5;i++)drawHouse(i);for(auto t:trees)drawTree(t);drawBike();}
+void drawWorld(){if(mapTexture){SDL_FRect dst{0,0,(float)W,(float)H};SDL_RenderTexture(ren,mapTexture,nullptr,&dst);}else drawStaticWorld();drawDog();drawOwner();drawTarget();drawPostie();
+ if(parcelGround)drawParcelAt(parcelX,parcelY,0);
+ if(mode==Mode::Flight){float t=clampf(flightTime/flightLength,0,1);float x=throwX+(landX-throwX)*t,y=throwY+(landY-throwY)*t,z=std::sin(PI*t)*(38+charge*24);drawParcelAt(x,y,z);}
+ if(mode==Mode::Escape){rect(24,TOP+9,140,28,C{10,28,42,210});text("BIKE ->",34,TOP+18,1,gold);line(108,TOP+23,px,py, C{255,222,82,170});}
 }
-void drawRouteMap(int x,int y,int w,int h) {
-    fill(x,y,w,h,Color{11,35,61,255});
-    // Suburb map is a hand-drawn road atlas, not a generic minimap widget.
-    line(x+7,y+h-14,x+w*.35f,y+8,Color{69,110,150,255});
-    line(x+w*.27f,y+h-3,x+w*.6f,y+5,Color{69,110,150,255});
-    line(x+w*.55f,y+h-10,x+w*.34f,y+h*.48f,Color{52,93,133,255});
-    line(x+w*.58f,y+h*.45f,x+w-6,y+h*.16f,Color{69,110,150,255});
-    line(x+w*.08f,y+h*.63f,x+w*.88f,y+h*.79f,Color{48,86,126,255});
-    line(x+w*.14f,y+h*.2f,x+w*.74f,y+h*.46f,Color{48,86,126,255});
-    for(int i=0;i<5;i++) {
-        int px=x+22+(i*47)%std::max(50,w-42), py=y+20+(i*31)%(std::max(42,h-42));
-        Color c=i==stopIndex?gold:(i<stopIndex?green:red);
-        fill(px-4,py-4,9,9,c); fill(px-1,py-1,3,3,Color{255,255,255,255});
-    }
-    fill(x+w-27,y+8,17,12,Color{66,141,74,255});
-    text("N",x+w-19,y+20,1,white);
+void drawHud(){rect(0,0,W,TOP,C{23,48,68,255});rect(0,TOP-3,W,3,C{139,178,180,255});
+ text("AUSPOST / DELIVERY SHIFT",17,13,2,white);text("KOOKABURRA DISTRICT  -  1997",17,43,1,pale);
+ rect(355,12,264,46,C{10,28,42,255});text((std::string("STOP ")+std::to_string(std::min(stop+1,5))+" / 5").c_str(),369,20,2,gold);text(houses[stop].addr,369,43,1,white);
+ rect(638,12,144,46,C{10,28,42,255});text("SHIFT",650,19,1,pale);char tb[24];std::snprintf(tb,sizeof tb,"%02d:%02d",std::max(0,(int)shiftTime)/60,std::max(0,(int)shiftTime)%60);text(tb,650,34,2,shiftTime<25?red:white);
+ rect(800,12,143,46,C{10,28,42,255});text("SCORE",812,19,1,pale);char sb[24];std::snprintf(sb,sizeof sb,"%06d",score);text(sb,812,34,2,gold);
+ // bottom HUD is drawn separately after world in draw()
 }
-void drawHud() {
-    drawPanel(134,114,300,136,"LEAVE CARD BEFORE CAUGHT");
-    text("1. AIM FOR THE DROP",154,150,2,gold);
-    text("2. FILL OUT CARD",178,180,2,white);
-    text("3. ESCAPE TO YOUR BIKE",178,210,2,white);
-    if(phase==Phase::Aim) fill(146,151,5,18,gold);
-    else if(phase==Phase::Card) fill(169,181,5,17,gold);
-    else if(phase==Phase::Escape) fill(169,211,5,17,gold);
+void drawBottom(){rect(0,BOTTOM,W,H-BOTTOM,C{18,43,60,255});rect(0,BOTTOM,W,2,C{136,171,166,255});
+ text(status,17,BOTTOM+10,1,white);text("ARROWS/WASD MOVE   SHIFT SPRINT   MOUSE AIM   HOLD+RELEASE SPACE THROW",17,BOTTOM+30,1,pale);
+ text("E PICK UP",17,BOTTOM+48,1,gold);text("TAB ROUTE",128,BOTTOM+48,1,gold);
+ rect(670,BOTTOM+12,265,15,C{48,65,70,255});rect(670,BOTTOM+12,265*clampf(detect,0,1),15,detect>.68f?red:C{229,165,65,255});box(670,BOTTOM+12,265,15,C{171,193,179,255});text("SUSPICION",670,BOTTOM+34,1,pale);
+ if(mode==Mode::Play&&hasParcel){rect(410,BOTTOM+49,235,8,C{47,62,65,255});rect(410,BOTTOM+49,235*charge,8,charge>.82?red:gold);}
+}
+void panel(float x,float y,float w,float h){rect(x,y,w,h,C{12,28,43,245});box(x,y,w,h,C{220,210,171,255});rect(x+4,y+4,w-8,2,C{94,145,163,255});}
+void drawTitle(){rect(0,TOP,W,BOTTOM-TOP,C{13,29,34,170});panel(184,214,592,310);center("AUSPOST SIMULATOR",480,246,4,white);center("DELIVERY ATTEMPT",480,284,2,gold);center("A REAL SUBURBAN ROUTE. WALK IT YOURSELF.",480,330,1,pale);center("FIND THE DROP ZONE  /  CHARGE A THROW  /  FILE THE CARD",480,364,1,white);center("AVOID THE DOG. RETURN TO YOUR BIKE. REPEAT.",480,386,1,white);rect(350,429,260,43,C{166,96,35,255});box(350,429,260,43,gold);center("ENTER TO START SHIFT",480,445,1,white);center("MOVE: ARROWS/WASD    THROW: HOLD SPACE    PICK UP: E",480,492,1,pale);}
+void drawCard(){rect(0,TOP,W,BOTTOM-TOP,C{9,20,29,170});panel(225,119,510,473);rect(239,132,482,42,C{45,86,111,255});rect(239,174,482,405,paper);text("FORM 97-B / DELIVERY ATTEMPT",257,147,2,white);text(houses[stop].addr,258,191,2,ink);text(houses[stop].note,258,218,1,C{70,75,68,255});line(255,238,705,238,C{139,145,132,255});text("01  REASON FOR CARD",258,252,1,blue);
+ for(int i=0;i<3;i++){int y=274+i*27;if(i==reason&&cardField==0)rect(251,y-4,454,23,C{255,222,89,150});box(264,y,12,12,blue);if(i==reason)rect(267,y+3,6,6,blue);text(std::string(1,char('A'+i))+"  "+reasons[i],287,y+1,1,ink);}
+ text("02  COLLECT FROM",258,367,1,blue);for(int i=0;i<3;i++){int y=388+i*27;if(i==pickup&&cardField==1)rect(251,y-4,454,23,C{255,222,89,150});box(264,y,12,12,blue);if(i==pickup)rect(267,y+3,6,6,blue);text(std::string(1,char('A'+i))+"  "+pickups[i],287,y+1,1,ink);}
+ text("THE CUSTOMER WILL DEFINITELY READ THIS.",258,484,1,C{70,75,68,255});rect(526,514,172,38,C{161,61,48,255});box(526,514,172,38,C{235,207,158,255});center(cardField==0?"ENTER: NEXT":"ENTER: STAMP",612,528,1,white);
+ rect(258,556,444,9,C{184,187,169,255});rect(258,556,444*clampf(stopTime/13,0,1),9,stopTime<4?red:green);}
+void drawBetween(){rect(0,TOP,W,BOTTOM-TOP,C{9,20,29,160});panel(278,243,404,188);center(parcelDelivered?"PARCEL DELIVERED":"SHIFT OVER",480,271,2,green);center("CARD FILED. BIKE IS WAITING.",480,310,1,white);char s[80];std::snprintf(s,sizeof s,"STOP +%03d     ROUTE %06d",stopScore,score);center(s,480,344,2,gold);center("PRESS ENTER TO ROLL OUT",480,391,1,pale);}
+void drawSummary(){rect(0,TOP,W,BOTTOM-TOP,C{8,17,26,190});panel(240,169,480,368);center("SHIFT COMPLETE",480,203,4,gold);center("KOOKABURRA DISTRICT / ROUTE 03",480,253,1,pale);char s[48];std::snprintf(s,sizeof s,"%06d POINTS",score);center(s,480,300,4,white);center((std::to_string(delivered)+" / 5 DELIVERED").c_str(),480,377,2,green);center((std::to_string(cleanCards)+" CLEAN CARDS").c_str(),480,409,1,pale);center((std::to_string(caught)+" AWKWARD INTERACTIONS").c_str(),480,432,1,pale);rect(365,467,230,38,C{157,90,32,255});center("ENTER TO RIDE AGAIN",480,480,1,white);}
+void drawMap(){rect(0,TOP,W,BOTTOM-TOP,C{7,18,27,218});panel(230,120,500,475);center("ROUTE SHEET / 03",480,151,2,gold);for(int i=0;i<5;i++){int y=198+i*67;rect(261,y,438,54,C{17,39,54,255});box(261,y,438,54,C{76,115,126,255});C c=i<stop?green:i==stop?gold:pale;circle(283,y+27,9,c);text(std::to_string(i+1)+"  "+houses[i].addr,306,y+12,1,white);text(i<stop?"DONE":i==stop?"CURRENT":"WAITING",306,y+32,1,c);}center("TAB TO CLOSE",480,558,1,pale);}
+void draw(){set(C{12,25,33,255});SDL_RenderClear(ren);drawHud();drawWorld();drawBottom();if(mode==Mode::Title)drawTitle();if(mode==Mode::Card)drawCard();if(mode==Mode::Between)drawBetween();if(mode==Mode::Summary)drawSummary();if(mapOpen)drawMap();SDL_RenderPresent(ren);}
 
-    drawPanel(443,114,260,136,"PARCEL YEET-O-METER");
-    int gx=459, gy=168, gw=229, gh=32;
-    // segmented green -> amber -> danger charge meter
-    for(int i=0;i<20;i++) {
-        Color c=i<9?Color{69,191,122,255}:i<14?Color{236,196,55,255}:Color{219,73,65,255};
-        fill(gx+i*11,gy,9,gh,c);
-        fill(gx+i*11,gy+gh-4,9,4,Color{18,33,50,255});
-    }
-    int pointer=gx+(int)(std::clamp(charge,0.0f,1.0f)*gw);
-    fill(pointer-3,gy-7,6,gh+13,white);
-    text(phase==Phase::Aim?(charging?"RELEASE IN THE GOLD": "HOLD SPACE TO CHARGE"):
-         phase==Phase::Flight?"BOX IS IN THE AIR": phase==Phase::Card?"PAPERWORK INCOMING":
-         phase==Phase::Escape?"RUN, POSTIE, RUN": "SHIFT IN PROGRESS",469,211,1,lightBlue);
-
-    drawPanel(711,114,145,136,"TIME LEFT");
-    char timebuf[24]; std::snprintf(timebuf,sizeof timebuf,"%02d:%02d",std::max(0,(int)shiftSeconds)/60,std::max(0,(int)shiftSeconds)%60);
-    centerText(timebuf,783,159,5,shiftSeconds<14?red:Color{255,86,77,255});
-    centerText("SHIFT CLOCK",783,220,1,lightBlue);
-
-    drawPanel(865,114,160,136,"CARD: BLANK");
-    bevel(891,153,111,72,Color{233,232,217,255},true);
-    for(int i=0;i<4;i++)line(902,166+i*12,989-(i%2)*18,166+i*12,Color{53,82,117,255});
-    fill(900,211,8,8,Color{68,88,111,255});
-    if(phase==Phase::Card)fill(974,158,16,16,red);
-
-    drawPanel(1030,114,168,136,"DOOR: QUIET");
-    // A tiny door visual with an animated rattle when detection is high.
-    int shake=detection>.72f?(int)(std::sin(animation*35)*4):0;
-    fill(1072+shake,153,65,82,Color{88,113,149,255});
-    outline(1072+shake,153,65,82,Color{176,195,218,255});
-    fill(1082+shake,164,43,67,Color{37,59,91,255});
-    fill(1117+shake,190,5,5,Color{255,210,74,255});
-    if(detection>.58f){text("!",1150,155,3,red);text("!",1164,175,2,red);}
-    text(detection>.75f?"SOMEONE'S UP":"LISTENING...",1043,222,1,detection>.75f?red:lightBlue);
-
-    drawPanel(1204,114,222,136,"ROUTE");
-    text(std::string("0")+std::to_string(stopIndex+1),1317,125,3,gold);
-    drawRouteMap(1215,153,198,83);
-    text((std::to_string(std::max(0,(int)route.size()-deliveries))+" LEFT").c_str(),1218,237,2,white);
+void selectCardAt(int x,int y){if(y>=268&&y<351){reason=clampf((y-268)/27,0,2);cardField=0;}else if(y>=382&&y<463){pickup=clampf((y-382)/27,0,2);cardField=1;}else if(x>510&&y>510&&y<560)stamp();}
+void doKey(SDL_Keycode k,SDL_Scancode sc){if(k==SDLK_TAB){mapOpen=!mapOpen;return;}if(sc==SDL_SCANCODE_R){startShift();return;}if(k==SDLK_ESCAPE){if(mapOpen)mapOpen=false;else mode=Mode::Title;return;}
+ if(k==SDLK_RETURN||k==SDLK_KP_ENTER){if(mode==Mode::Title){startShift();return;}if(mode==Mode::Card){if(cardField==0)cardField=1;else stamp();return;}if(mode==Mode::Between){nextStop();return;}if(mode==Mode::Summary){startShift();return;}}
+ if(mode==Mode::Play){if(k==SDLK_SPACE&&hasParcel){charging=true;charge=0;return;}if(k==SDLK_E){if(parcelGround&&dist(px,py,parcelX,parcelY)<34){parcelGround=false;hasParcel=true;status="PACKAGE RECOVERED. TRY THAT DROP AGAIN.";}else if(dist(px,py,70,610)<42){status="BIKE BAG CHECKED. ROUTE PARCEL READY.";}return;}}
+ if(mode==Mode::Card){if(k==SDLK_UP||k==SDLK_W){if(cardField==0)reason=(reason+2)%3;else pickup=(pickup+2)%3;}else if(k==SDLK_DOWN||k==SDLK_S){if(cardField==0)reason=(reason+1)%3;else pickup=(pickup+1)%3;}else if(k==SDLK_LEFT||k==SDLK_A)cardField=0;else if(k==SDLK_RIGHT||k==SDLK_D)cardField=1;else if(k==SDLK_1||k==SDLK_2||k==SDLK_3){int q=(int)(k-SDLK_1);if(cardField==0)reason=q;else pickup=q;}}
 }
-void drawTarget() {
-    const Stop&s=route[stopIndex];
-    // A painted parcel target floats over the actual garden art; the dashed edge makes it legible.
-    int zx=(int)s.zx,zy=(int)s.zy;
-    Color c=gold;
-    if(s.safeName==std::string("LETTERBOX")) c=Color{101,221,245,255};
-    dashedRect(zx-47,zy-25,94,50,c,8);
-    centerText(s.safeName,zx,zy-47,1,Color{255,250,183,255});
-    if(phase==Phase::Aim) {
-        float arc=80.0f+charge*130.0f;
-        for(int i=0;i<24;i++) {
-            float t=i/23.0f;
-            float xx=THROW_X+(targetX-THROW_X)*t+route[stopIndex].wind*65*t;
-            float yy=THROW_Y+(targetY-THROW_Y)*t-std::sin(PI*t)*arc;
-            if(i%2==0)fill(xx-3,yy-3,6,6,Color{254,241,175,210});
-        }
-        // reticle
-        int tx=(int)targetX,ty=(int)targetY;
-        line(tx-16,ty,tx-5,ty,white);line(tx+5,ty,tx+16,ty,white);
-        line(tx,ty-16,tx,ty-5,white);line(tx,ty+5,tx,ty+16,white);
-        outline(tx-4,ty-4,8,8,gold);
-    }
+void update(float dt){anim+=dt;if(mode==Mode::Title||mode==Mode::Summary||mode==Mode::Between)return;shiftTime-=dt;if(shiftTime<=0){mode=Mode::Summary;status="SHIFT CLOCK EXPIRED. THE MANAGER HAS A CLIPBOARD.";return;}stopTime-=dt;
+ const bool*keys=SDL_GetKeyboardState(nullptr);float dx=(keys[SDL_SCANCODE_RIGHT]||keys[SDL_SCANCODE_D])-(keys[SDL_SCANCODE_LEFT]||keys[SDL_SCANCODE_A]);float dy=(keys[SDL_SCANCODE_DOWN]||keys[SDL_SCANCODE_S])-(keys[SDL_SCANCODE_UP]||keys[SDL_SCANCODE_W]);float mag=std::hypot(dx,dy);if(mag>0){dx/=mag;dy/=mag;bool sprint=keys[SDL_SCANCODE_LSHIFT]||keys[SDL_SCANCODE_RSHIFT];float speed=sprint?195.0f:132.0f;if(mode==Mode::Card) speed=0;vx=dx*speed;vy=dy*speed;movePlayer(vx*dt,vy*dt);}else vx=vy=0;
+ dogX=830+std::sin(anim*1.3f)*22;dogY=270+std::sin(anim*2.1f)*8;
+ if(mode==Mode::Play){if(charging)charge=std::min(1.0f,charge+dt*.62f);stopTime-=0;float d=dist(px,py,dogX,dogY);if(stop==2&&d<145){detect=std::min(1.0f,detect+dt*(.08f+(145-d)*.0008f));if(d<90)status="THE DOG IS JUDGING YOUR LINE. KEEP MOVING.";}else detect=std::max(.03f,detect-dt*.08f);if(detect>=1)caughtPenalty();if(stopTime<=0){status="THE DELIVERY WINDOW CLOSED. CARD ANYWAY.";beginCard();}}
+ else if(mode==Mode::Flight){flightTime+=dt;if(flightTime>=flightLength)landParcel();}
+ else if(mode==Mode::Card){detect=std::min(1.0f,detect+dt*.023f);if(stopTime<=0){stamp();status="FORM TIMED OUT. THE OFFICE WILL NOT BE PLEASED.";}}
+ else if(mode==Mode::Escape){float d=dist(px,py,ownerX,ownerY);float ox=px-ownerX,oy=py-ownerY;if(d>1){float sp=78*dt;ownerX+=ox/d*sp;ownerY+=oy/d*sp;}detect=std::min(1.0f,detect+dt*.009f);if(d<26||detect>=1){caughtPenalty();ownerActive=false;}if(dist(px,py,70,610)<34)finishStop();}
 }
-void drawParcel(float x,float y,float scale=1.0f) {
-    fill(x-14*scale,y+13*scale,31*scale,5*scale,Color{20,27,28,95});
-    fill(x-12*scale,y-10*scale,25*scale,22*scale,Color{169,111,56,255});
-    fill(x-12*scale,y-10*scale,25*scale,4*scale,Color{220,162,90,255});
-    fill(x-2*scale,y-10*scale,5*scale,22*scale,Color{207,67,50,255});
-    fill(x+4*scale,y-8*scale,7*scale,7*scale,Color{239,233,202,255});
-    outline(x-12*scale,y-10*scale,25*scale,22*scale,Color{74,45,31,255});
-}
-void drawWorldFx() {
-    const Stop&s=route[stopIndex];
-    if(s.wind!=0) {
-        for(int i=0;i<8;i++) {
-            float xx=std::fmod(animation*160+i*179.0f,1300.0f)+WORLD_X;
-            float yy=WORLD_Y+340+(i*73)%360;
-            line(xx,yy,xx+32+std::abs(s.wind)*60,yy-8,Color{214,237,178,135});
-        }
-    }
-    if(s.rain) {
-        for(int i=0;i<55;i++) {
-            float xx=WORLD_X+std::fmod(i*181.0f+animation*280.0f,WORLD_W);
-            float yy=WORLD_Y+std::fmod(i*97.0f+animation*420.0f,WORLD_H);
-            line(xx,yy,xx-7,yy+17,Color{194,222,250,90});
-        }
-        fill(WORLD_X,WORLD_Y,WORLD_W,WORLD_H,Color{48,68,108,27});
-    }
-    // Alarm sparks at the door and cheeky dog bark pips.
-    if(detection>0.46f) {
-        int n=(int)(animation*4)%3;
-        text("!",1180+n*8,565-n*4,2,red);
-    }
-    if(phase==Phase::Flight) {
-        float t=std::clamp(flightT/flightDuration,0.0f,1.0f);
-        float arc=80.0f+charge*130.0f;
-        float x=THROW_X+(targetX-THROW_X)*t+route[stopIndex].wind*65*t;
-        float y=THROW_Y+(targetY-THROW_Y)*t-std::sin(PI*t)*arc;
-        for(int i=0;i<5;i++)fill(x-i*12,y+i*3,5,5,Color{254,228,137,(Uint8)(190-i*28)});
-        drawParcel(x,y,0.82f+0.18f*std::sin(t*PI));
-    }
-}
-
-void drawWorld() {
-    if(yard) {SDL_FRect dst{(float)WORLD_X,(float)WORLD_Y,(float)WORLD_W,(float)WORLD_H};SDL_RenderTexture(renderer,yard,nullptr,&dst);}
-    else fill(WORLD_X,WORLD_Y,WORLD_W,WORLD_H,Color{67,126,68,255});
-    drawWorldFx();
-    if(phase==Phase::Aim) drawTarget();
-}
-void drawWelcome() {
-    fill(WORLD_X,WORLD_Y,WORLD_W,WORLD_H,Color{3,12,25,125});
-    bevel(372,394,705,325,Color{8,26,49,244},true);
-    drawBird(678,424,4,Color{242,243,226,255});
-    centerText("AUSPOST SIMULATOR",724,505,6,Color{244,239,217,255});
-    centerText("DELIVERY ATTEMPT",724,552,4,Color{255,224,67,255});
-    centerText("SMALL COUNTRY. VERY LARGE PAPERWORK.",724,600,2,Color{188,215,239,255});
-    button(524,650,400,62,"START YOUR SHIFT",true);
-    centerText("SPACE THROW  /  MOUSE AIM  /  ARROWS ESCAPE",724,742,1,white);
-}
-void drawCard() {
-    // Paper form with cream stock, blue rules, stamp and route-office eccentricities.
-    bevel(380,328,690,570,Color{9,22,40,248},true);
-    fill(396,344,658,538,Color{239,235,214,255});
-    fill(396,344,658,48,Color{37,75,119,255});
-    drawBird(411,351,2,Color{236,241,226,255});
-    text("FORM 97-B  /  DELIVERY ATTEMPT",458,360,2,white);
-    text("POSTIE'S COPY",868,361,1,Color{191,216,238,255});
-    text("YOU MISSED",424,413,4,Color{20,47,77,255});
-    text(route[stopIndex].address,424,451,2,Color{44,68,91,255});
-    text(route[stopIndex].note,424,481,1,Color{87,95,94,255});
-    line(420,503,1018,503,Color{145,165,177,255});
-    text("01   REASON FOR CARD",424,520,2,Color{37,72,106,255});
-    for(int i=0;i<3;i++) {
-        int yy=548+i*35;
-        if(cardReason==i)fill(414,yy-4,612,29,Color{255,224,73,115});
-        outline(430,yy,15,15,Color{55,84,108,255});
-        if(cardReason==i)fill(434,yy+4,7,7,Color{35,88,137,255});
-        text(std::string(1,char('A'+i))+"  "+reasonOptions[i],460,yy+1,2,Color{35,52,68,255});
-    }
-    text("02   COLLECT FROM",424,663,2,Color{37,72,106,255});
-    for(int i=0;i<3;i++) {
-        int yy=692+i*35;
-        if(cardPickup==i)fill(414,yy-4,612,29,Color{255,224,73,115});
-        outline(430,yy,15,15,Color{55,84,108,255});
-        if(cardPickup==i)fill(434,yy+4,7,7,Color{35,88,137,255});
-        text(std::string(1,char('A'+i))+"  "+pickupOptions[i],460,yy+1,2,Color{35,52,68,255});
-    }
-    // Print-time deadline, punch-stamp, and form paper clip.
-    text("PRESENT THIS CARD WITH PHOTO ID",424,807,1,Color{96,102,101,255});
-    bevel(835,819,179,43,Color{164,55,47,255},true);
-    centerText(cardField==2?"ENTER: STAMP":"ENTER: NEXT",924,834,1,white);
-    text("CARD TIMER",420,852,1,Color{81,92,96,255});
-    fill(505,852,470,10,Color{184,194,187,255});
-    fill(505,852,470*std::clamp(stopSeconds/13.0f,0.0f,1.0f),10,
-         stopSeconds<6?red:Color{58,157,119,255});
-}
-void drawMapOverlay() {
-    fill(130,106,1300,902,Color{5,13,28,225});
-    bevel(330,274,790,632,Color{19,45,76,255},true);
-    text("SHIFT ROUTE / 03",380,319,3,Color{255,228,92,255});
-    text("FIVE STOPS. ONE BICYCLE. QUESTIONABLE INSURANCE.",380,356,1,lightBlue);
-    for(int i=0;i<5;i++) {
-        int y=404+i*88;
-        Color c=i<stopIndex?green:i==stopIndex?gold:muted;
-        fill(381,y,687,69,Color{9,24,44,255}); outline(381,y,687,69,Color{65,104,145,255});
-        fill(399,y+21,26,26,c);
-        text(std::to_string(i+1),407,y+27,1,ink);
-        text(route[i].suburb,447,y+13,2,white);
-        text(route[i].address,447,y+42,1,lightBlue);
-        text(i<stopIndex?"DONE":i==stopIndex?"NEXT":"WAITING",932,y+28,1,c);
-    }
-    centerText("TAB TO CLOSE",724,824,1,white);
-}
-void drawBetween() {
-    fill(WORLD_X,WORLD_Y,WORLD_W,WORLD_H,Color{5,14,25,115});
-    bevel(424,430,600,245,Color{8,28,51,245},true);
-    centerText(parcelSafe?"PARCEL: SAFELY YEETED":"PARCEL: NEEDS A BETTER POSTIE",724,470,3,parcelSafe?green:orange);
-    centerText(cardAccurate?"CARD: ACCURATE ENOUGH FOR THE UNION":"CARD: THE LPO IS ON THE WRONG SIDE",724,514,1,white);
-    centerText(cleanEscape?"GETAWAY: ABSOLUTELY NO EYE CONTACT":"GETAWAY: RESIDENT SAW THE SHORTS",724,547,1,white);
-    char b[80];std::snprintf(b,sizeof b,"STOP SCORE   +%d      TOTAL   %d",runScore,totalScore);
-    centerText(b,724,585,2,gold);
-    button(555,624,338,44,stopIndex+1==(int)route.size()?"FILE THE SHIFT":"NEXT DELIVERY",true);
-}
-void drawSummary() {
-    fill(WORLD_X,WORLD_Y,WORLD_W,WORLD_H,Color{4,13,29,216});
-    bevel(336,288,775,697,Color{12,37,67,250},true);
-    centerText("SHIFT COMPLETE",724,333,5,Color{255,231,93,255});
-    centerText("KOOKABURRA DISTRICT / ROUTE 03",724,390,1,lightBlue);
-    char b[80];std::snprintf(b,sizeof b,"%06d POINTS",totalScore);
-    centerText(b,724,437,4,white);
-    int medalCount=std::clamp(totalScore/360,0,3);
-    for(int i=0;i<3;i++) {
-        int x=610+i*89; Color c=i<medalCount?gold:Color{75,91,108,255};
-        fill(x,508,52,52,c); outline(x,508,52,52,Color{231,242,239,255});
-        centerText(i==0?"S":i==1?"A":"F",x+26,529,2,Color{33,47,58,255});
-    }
-    centerText("DELIVERIES",528,584,1,muted);
-    centerText((std::to_string(deliveries)+" / 5").c_str(),528,607,2,white);
-    centerText("CLEAN CARDS",724,584,1,muted);
-    centerText((std::to_string(cleanCards)+" / 5").c_str(),724,607,2,white);
-    centerText("PAPERWORK",920,584,1,muted);
-    centerText(caughtCount==0?"NO WITNESSES":"WITNESSES: "+std::to_string(caughtCount),920,607,1,white);
-    button(520,690,408,54,"RUN THE ROUTE AGAIN",true);
-    centerText("HAPPY POST, QUIET DOGS, NO CLAIMS (PROBABLY)",724,777,1,lightBlue);
-}
-void drawAimCaption() {
-    if(phase!=Phase::Aim) return;
-    fill(428,949,708,42,Color{7,22,39,205});
-    centerText("AIM FOR THE MARK  /  HOLD SPACE OR TOUCH THE GOLD BUTTON",782,963,1,white);
-    button(1190,944,190,48,charging?"RELEASE TO YEET":"HOLD TO YEET",true);
-    // Small wind arrow helps turn the level note into something actionable.
-    float wind=route[stopIndex].wind;
-    if(std::abs(wind)>0.05f) {
-        int ax=1320, ay=918; line(ax,ay,ax+(wind>0?54:-54),ay-15,Color{255,239,156,255});
-        line(ax+(wind>0?54:-54),ay-15,ax+(wind>0?41:-41),ay-16,Color{255,239,156,255});
-        centerText("WIND",ax,ay+8,1,white);
-    }
-}
-void draw() {
-    SDL_SetRenderDrawColor(renderer,16,43,76,255); SDL_RenderClear(renderer);
-    drawDesktop(); drawWorld(); drawHud(); drawAimCaption();
-    if(phase==Phase::Welcome)drawWelcome();
-    if(phase==Phase::Card)drawCard();
-    if(phase==Phase::Between)drawBetween();
-    if(phase==Phase::Summary)drawSummary();
-    if(showingMap)drawMapOverlay();
-    SDL_RenderPresent(renderer);
-}
-
-void chooseCard(int x,int y) {
-    if(y>=540&&y<653){cardReason=std::clamp((y-544)/35,0,2);cardField=1;}
-    else if(y>=681&&y<795){cardPickup=std::clamp((y-688)/35,0,2);cardField=2;}
-    else if(x>=820&&y>=805&&y<870)stampCard();
-}
-void update(float dt) {
-    animation+=dt;
-    if(messageTimer>0)messageTimer=std::max(0.0f,messageTimer-dt);
-    if(phase==Phase::Welcome||phase==Phase::Summary)return;
-    shiftSeconds-=dt;
-    stopSeconds-=dt;
-    if(shiftSeconds<=0 && phase!=Phase::Summary) { phase=Phase::Summary; statusMessage="SHIFT CLOCK HIT ZERO. THE OFFICE HAS NOTICED."; return; }
-    if(phase==Phase::Aim) {
-        if(charging)charge=std::min(1.0f,charge+dt*0.59f);
-        detection=std::min(1.0f,detection+dt*(0.006f+std::abs(route[stopIndex].wind)*0.008f));
-        if(stopSeconds<=0){statusMessage="TOO SLOW. THE FORM HAS BECOME SENTIENT.";beginCard();}
-    } else if(phase==Phase::Flight) {
-        flightT+=dt;
-        if(flightT>=flightDuration)landParcel();
-    } else if(phase==Phase::Card) {
-        detection=std::min(1.0f,detection+dt*0.024f);
-        if(stopSeconds<=0){stampCard(true);statusMessage="THE FORM TIMED OUT. SOMEHOW IT'S STILL PAPER.";}
-    } else if(phase==Phase::Escape) {
-        float movement=(SDL_GetKeyboardState(nullptr)[SDL_SCANCODE_LEFT]||SDL_GetKeyboardState(nullptr)[SDL_SCANCODE_A])?1.55f:0.68f;
-        bool sprint=SDL_GetKeyboardState(nullptr)[SDL_SCANCODE_LSHIFT]||SDL_GetKeyboardState(nullptr)[SDL_SCANCODE_RSHIFT];
-        escapeProgress=std::min(1.0f,escapeProgress+dt*movement*(sprint?1.8f:1.0f));
-        detection=std::max(0.08f,detection-dt*(sprint?0.009f:0.002f));
-        if(detection>=0.98f){cleanEscape=false;caughtCount++;statusMessage="CAUGHT. APOLOGISE, CYCLE BACK, LOSE 20 SECONDS.";shiftSeconds=std::max(0.0f,shiftSeconds-5.0f);detection=0.55f;escapeProgress=1.0f;}
-        if(escapeProgress>=1.0f)finishStop();
-    } else if(phase==Phase::Between) {
-        // allow a short breather while the next route card slides in
-    }
-}
-void screenshotIfRequested() {
-    if(capturePath.empty())return;
-    SDL_Surface* s=SDL_RenderReadPixels(renderer,nullptr);
-    if(s){SDL_SaveBMP(s,capturePath.c_str());SDL_DestroySurface(s);}
-    capturePath.clear();
-    quitRequested=true;
-}
-void frame() {
-    Uint64 now=SDL_GetTicks();
-    float dt=previousTicks?std::clamp((now-previousTicks)/1000.0f,0.0f,0.04f):0.016f;
-    previousTicks=now;
-    SDL_Event ev;
-    while(SDL_PollEvent(&ev)) {
-        if(ev.type==SDL_EVENT_QUIT)quitRequested=true;
-        if(ev.type==SDL_EVENT_KEY_DOWN&&!ev.key.repeat) {
-            SDL_Keycode k=ev.key.key; SDL_Scancode sc=ev.key.scancode;
-            if(k==SDLK_TAB){showingMap=!showingMap;}
-            else if(sc==SDL_SCANCODE_R){startShift();}
-            else if(k==SDLK_ESCAPE){if(showingMap)showingMap=false;else if(phase!=Phase::Welcome)phase=Phase::Welcome;}
-            else if(k==SDLK_RETURN||k==SDLK_KP_ENTER) {
-                if(phase==Phase::Welcome)startShift();
-                else if(phase==Phase::Card){if(cardField<2)cardField++;else stampCard();}
-                else if(phase==Phase::Between)nextStop();
-                else if(phase==Phase::Summary)startShift();
-            } else if(k==SDLK_SPACE&&phase==Phase::Aim) {charging=true;}
-            else if(phase==Phase::Aim&&(k==SDLK_LEFT||sc==SDL_SCANCODE_A))targetX-=24;
-            else if(phase==Phase::Aim&&(k==SDLK_RIGHT||sc==SDL_SCANCODE_D))targetX+=24;
-            else if(phase==Phase::Aim&&(k==SDLK_UP||sc==SDL_SCANCODE_W))targetY-=24;
-            else if(phase==Phase::Aim&&(k==SDLK_DOWN||sc==SDL_SCANCODE_S))targetY+=24;
-            else if(phase==Phase::Card) {
-                if(k==SDLK_LEFT||sc==SDL_SCANCODE_A) {if(cardField==0)cardReason=(cardReason+2)%3;else if(cardField==1)cardPickup=(cardPickup+2)%3;}
-                if(k==SDLK_RIGHT||sc==SDL_SCANCODE_D) {if(cardField==0)cardReason=(cardReason+1)%3;else if(cardField==1)cardPickup=(cardPickup+1)%3;}
-                if(k==SDLK_1||k==SDLK_2||k==SDLK_3) {
-                    int v=(int)(k-SDLK_1);if(cardField==0)cardReason=v;else if(cardField==1)cardPickup=v;
-                }
-            }
-        }
-        if(ev.type==SDL_EVENT_KEY_UP&&ev.key.key==SDLK_SPACE&&phase==Phase::Aim)launchParcel();
-        if(ev.type==SDL_EVENT_MOUSE_MOTION||ev.type==SDL_EVENT_MOUSE_BUTTON_DOWN||ev.type==SDL_EVENT_MOUSE_BUTTON_UP) {
-            SDL_Event e=ev; SDL_ConvertEventToRenderCoordinates(renderer,&e);
-            if(e.type==SDL_EVENT_MOUSE_MOTION) {
-                if(phase==Phase::Aim && !(e.motion.x>=1190&&e.motion.x<=1380&&e.motion.y>=944&&e.motion.y<=992)){targetX=e.motion.x;targetY=e.motion.y;targetClamp();}
-            } else if(e.type==SDL_EVENT_MOUSE_BUTTON_DOWN&&e.button.button==SDL_BUTTON_LEFT) {
-                int mx=(int)e.button.x,my=(int)e.button.y;
-                if(phase==Phase::Aim&&mx>=1190&&mx<=1380&&my>=944&&my<=992){charging=true;pointerCharging=true;charge=0;}
-            } else if(e.type==SDL_EVENT_MOUSE_BUTTON_UP&&e.button.button==SDL_BUTTON_LEFT) {
-                int mx=(int)e.button.x,my=(int)e.button.y;
-                if(pointerCharging){pointerCharging=false;launchParcel();}
-                else if(phase==Phase::Welcome&&mx>510&&mx<938&&my>640&&my<730)startShift();
-                else if(phase==Phase::Card)chooseCard(mx,my);
-                else if(phase==Phase::Between&&mx>540&&mx<910&&my>615&&my<680)nextStop();
-                else if(phase==Phase::Summary&&mx>510&&mx<940&&my>680&&my<750)startShift();
-                else if(phase==Phase::Aim&&!(mx>=1190&&mx<=1380&&my>=944&&my<=992)){targetX=mx;targetY=my;targetClamp();}
-            }
-        }
-        if(ev.type==SDL_EVENT_FINGER_MOTION||ev.type==SDL_EVENT_FINGER_DOWN||ev.type==SDL_EVENT_FINGER_UP) {
-            float fx=ev.tfinger.x*W, fy=ev.tfinger.y*H;
-            if(ev.type==SDL_EVENT_FINGER_MOTION) {
-                if(phase==Phase::Aim&&!(fx>=1190&&fx<=1380&&fy>=944&&fy<=992)){targetX=fx;targetY=fy;targetClamp();}
-            } else if(ev.type==SDL_EVENT_FINGER_DOWN&&phase==Phase::Aim&&fx>=1190&&fx<=1380&&fy>=944&&fy<=992) {
-                charging=true;pointerCharging=true;charge=0;
-            } else if(ev.type==SDL_EVENT_FINGER_UP&&pointerCharging) {
-                pointerCharging=false;launchParcel();
-            }
-        }
-    }
-    targetClamp();
-    update(dt);
-    draw();
-    screenshotIfRequested();
+void frame(){Uint64 now=SDL_GetTicks();float dt=prevTicks?clampf((now-prevTicks)/1000.0f,0,.04f):.016f;prevTicks=now;SDL_Event e;while(SDL_PollEvent(&e)){if(e.type==SDL_EVENT_QUIT)quit=true;
+ if(e.type==SDL_EVENT_KEY_DOWN&&!e.key.repeat){if(e.key.key==SDLK_SPACE&&mode==Mode::Play&&hasParcel){charging=true;charge=0;}else doKey(e.key.key,e.key.scancode);}
+ if(e.type==SDL_EVENT_KEY_UP&&e.key.key==SDLK_SPACE&&charging)launch();
+ if(e.type==SDL_EVENT_MOUSE_MOTION||e.type==SDL_EVENT_MOUSE_BUTTON_DOWN||e.type==SDL_EVENT_MOUSE_BUTTON_UP){SDL_Event q=e;SDL_ConvertEventToRenderCoordinates(ren,&q);if(q.type==SDL_EVENT_MOUSE_MOTION){if(q.motion.y>=TOP&&q.motion.y<=BOTTOM){aimX=clampf(q.motion.x,0,W);aimY=clampf(q.motion.y,TOP,BOTTOM);}}else if(q.type==SDL_EVENT_MOUSE_BUTTON_DOWN&&q.button.button==SDL_BUTTON_LEFT){if(mode==Mode::Play&&hasParcel&&q.button.y>BOTTOM){charging=true;pointerCharge=true;charge=0;}else{aimX=q.button.x;aimY=q.button.y;}}else if(q.type==SDL_EVENT_MOUSE_BUTTON_UP&&q.button.button==SDL_BUTTON_LEFT){if(pointerCharge){pointerCharge=false;launch();}else if(mode==Mode::Title)startShift();else if(mode==Mode::Card)selectCardAt(q.button.x,q.button.y);else if(mode==Mode::Between)nextStop();else if(mode==Mode::Summary)startShift();}}
+ if(e.type==SDL_EVENT_FINGER_DOWN&&mode==Mode::Play){float x=e.tfinger.x*W,y=e.tfinger.y*H;aimX=x;aimY=y;charging=true;pointerCharge=true;charge=0;}
+ if(e.type==SDL_EVENT_FINGER_MOTION&&pointerCharge){aimX=e.tfinger.x*W;aimY=e.tfinger.y*H;}
+ if(e.type==SDL_EVENT_FINGER_UP&&pointerCharge){pointerCharge=false;launch();}
+ }
+ update(dt);draw();
 #ifdef __EMSCRIPTEN__
-    if(quitRequested)emscripten_cancel_main_loop();
+ if(quit) emscripten_cancel_main_loop();
 #endif
 }
 }
 
-int main(int argc,char**argv) {
-    for(int i=1;i<argc;i++)if(std::strcmp(argv[i],"--screenshot")==0&&i+1<argc)capturePath=argv[++i];
-    if(!SDL_Init(SDL_INIT_VIDEO|SDL_INIT_EVENTS)) {std::fprintf(stderr,"SDL_Init: %s\n",SDL_GetError());return 1;}
-    window=SDL_CreateWindow("AusPost Simulator — Kookaburra OS 97",W,H,SDL_WINDOW_RESIZABLE|SDL_WINDOW_HIGH_PIXEL_DENSITY);
-    if(!window){std::fprintf(stderr,"SDL_CreateWindow: %s\n",SDL_GetError());SDL_Quit();return 1;}
-    renderer=SDL_CreateRenderer(window,nullptr);
-    if(!renderer){std::fprintf(stderr,"SDL_CreateRenderer: %s\n",SDL_GetError());SDL_DestroyWindow(window);SDL_Quit();return 1;}
-    SDL_SetRenderLogicalPresentation(renderer,W,H,SDL_LOGICAL_PRESENTATION_LETTERBOX);
-    SDL_SetRenderVSync(renderer,1);
-    SDL_SetRenderDrawBlendMode(renderer,SDL_BLENDMODE_BLEND);
-    SDL_Surface* bmp=SDL_LoadBMP("assets/yard.bmp");
-    if(bmp){yard=SDL_CreateTextureFromSurface(renderer,bmp);SDL_DestroySurface(bmp);if(yard)SDL_SetTextureScaleMode(yard,SDL_SCALEMODE_NEAREST);}
-    else std::fprintf(stderr,"yard image missing: %s\n",SDL_GetError());
-    previousTicks=SDL_GetTicks();
+int main(int, char**){
+ if(!SDL_Init(SDL_INIT_VIDEO|SDL_INIT_EVENTS)){std::fprintf(stderr,"SDL_Init: %s\n",SDL_GetError());return 1;}
+ win=SDL_CreateWindow("AusPost Simulator - Delivery Attempt",W,H,SDL_WINDOW_RESIZABLE|SDL_WINDOW_HIGH_PIXEL_DENSITY);
+ if(!win){std::fprintf(stderr,"SDL_CreateWindow: %s\n",SDL_GetError());SDL_Quit();return 1;}
+ ren=SDL_CreateRenderer(win,nullptr);if(!ren){std::fprintf(stderr,"SDL_CreateRenderer: %s\n",SDL_GetError());SDL_DestroyWindow(win);SDL_Quit();return 1;}
+ SDL_SetRenderLogicalPresentation(ren,W,H,SDL_LOGICAL_PRESENTATION_LETTERBOX);SDL_SetRenderVSync(ren,1);SDL_SetRenderDrawBlendMode(ren,SDL_BLENDMODE_BLEND);
+ mapTexture=SDL_CreateTexture(ren,SDL_PIXELFORMAT_RGBA32,SDL_TEXTUREACCESS_TARGET,W,H);
+ if(mapTexture){SDL_SetTextureScaleMode(mapTexture,SDL_SCALEMODE_NEAREST);SDL_SetTextureBlendMode(mapTexture,SDL_BLENDMODE_BLEND);SDL_SetRenderTarget(ren,mapTexture);SDL_SetRenderDrawColor(ren,0,0,0,0);SDL_RenderClear(ren);drawStaticWorld();SDL_SetRenderTarget(ren,nullptr);}
+ prevTicks=SDL_GetTicks();
 #ifdef __EMSCRIPTEN__
-    emscripten_set_main_loop(frame,0,1);
+ emscripten_set_main_loop(frame,0,1);
 #else
-    while(!quitRequested)frame();
+ while(!quit)frame();
 #endif
-    if(yard)SDL_DestroyTexture(yard);
-    SDL_DestroyRenderer(renderer); SDL_DestroyWindow(window); SDL_Quit();
-    return 0;
+ if(mapTexture) SDL_DestroyTexture(mapTexture);
+ SDL_DestroyRenderer(ren);SDL_DestroyWindow(win);SDL_Quit();return 0;
 }

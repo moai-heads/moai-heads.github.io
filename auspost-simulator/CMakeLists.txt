@@ -26,11 +26,8 @@ if(EMSCRIPTEN)
         "-sALLOW_MEMORY_GROWTH=1"
         "-sMAX_WEBGL_VERSION=2"
         "-sMIN_WEBGL_VERSION=2"
-        "--preload-file" "${CMAKE_CURRENT_SOURCE_DIR}/assets/yard.bmp@/assets/yard.bmp"
     )
 else()
     find_package(SDL3 CONFIG REQUIRED)
     target_link_libraries(auspost PRIVATE SDL3::SDL3)
-    file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/assets")
-    configure_file(assets/yard.bmp "${CMAKE_BINARY_DIR}/assets/yard.bmp" COPYONLY)
 endif()
