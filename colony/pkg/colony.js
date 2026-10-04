@@ -2072,7 +2072,7 @@ async function __wbg_init(module_or_path) {
     }
 
     if (module_or_path === undefined) {
-        module_or_path = new URL('colony_bg.wasm?v=e603b2b', import.meta.url);
+        module_or_path = new URL('colony_bg.wasm?v=058ff22', import.meta.url);
     }
     const imports = __wbg_get_imports();
 
