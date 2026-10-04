@@ -22,7 +22,7 @@
     if (!navigator.gpu) {
       msg.innerHTML = "<div><b>DEEPHOLD</b>This demo needs WebGPU.<br>Try a recent Chrome, Edge or Brave (or Safari 18+).</div>";
     } else {
-      import("./pkg/colony.js?v=058ff22").then(m => m.default()).then(() => msg.remove())
+      import("./pkg/colony.js?v=d1fa367").then(m => m.default()).then(() => msg.remove())
         .catch(e => { msg.textContent = "failed to start: " + e; console.error(e); });
     }
   </script>
