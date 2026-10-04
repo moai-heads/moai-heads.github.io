@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DEEPHOLD — a colony simulator in Rust</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin:0; height:100%; background:#07090c; overflow:hidden;
+               font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  canvas { display:block; width:100vw; height:100vh; }
+  #msg { position:fixed; inset:0; display:grid; place-content:center; text-align:center;
+         color:#8fa2b8; padding:24px; line-height:1.6; }
+  #msg b { color:#d8e4f0; display:block; font-size:20px; letter-spacing:.35em; margin-bottom:12px; }
+</style>
+</head>
+<body>
+  <div id="msg"><div><b>DEEPHOLD</b>loading the colony…</div></div>
+  <script type="module">
+    const msg = document.getElementById("msg");
+    if (!navigator.gpu) {
+      msg.innerHTML = "<div><b>DEEPHOLD</b>This demo needs WebGPU.<br>Try a recent Chrome, Edge or Brave (or Safari 18+).</div>";
+    } else {
+      import("./pkg/colony.js?v=ae03a26").then(m => m.default()).then(() => msg.remove())
+        .catch(e => { msg.textContent = "failed to start: " + e; console.error(e); });
+    }
+  </script>
+</body>
+</html>
