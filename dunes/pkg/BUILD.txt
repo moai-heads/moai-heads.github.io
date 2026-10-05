@@ -1,1 +1,1 @@
-2026-10-05T00:19:05Z  rev=1bc2af1  wasm-bindgen=0.2.129
+2026-10-05T01:03:48Z  rev=1acb774  wasm-bindgen=0.2.129
