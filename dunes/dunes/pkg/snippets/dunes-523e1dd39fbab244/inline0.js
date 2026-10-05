@@ -1,1 +1,0 @@
-export function dunesHeroAudioState(t,s,b,a,y) { globalThis.dunesHeroAudioUpdate?.(t,s,b,a,y); }
